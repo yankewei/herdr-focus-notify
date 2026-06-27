@@ -35,6 +35,22 @@ struct StateLabels {
     task: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentListEnvelope {
+    result: Option<AgentListResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentListResult {
+    agents: Vec<AgentInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentInfo {
+    focused: bool,
+    pane_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FocusNotification {
     pane_id: String,
@@ -57,14 +73,10 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    let herdr_bin = resolve_herdr_bin();
+
     let notification = if env::args().any(|arg| arg == "--test") {
-        FocusNotification {
-            pane_id: "test-pane".to_string(),
-            status: "blocked".to_string(),
-            title: "Herdr Focus Notify test".to_string(),
-            body: "Click to run: herdr agent focus test-pane".to_string(),
-            group: "herdr-test-pane".to_string(),
-        }
+        test_notification(&herdr_bin)
     } else {
         let event_json = match env::var("HERDR_PLUGIN_EVENT_JSON") {
             Ok(value) => value,
@@ -81,7 +93,6 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let herdr_bin = config_var("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".to_string());
     let script_path = write_focus_script(&notification.pane_id, &herdr_bin)
         .map_err(|err| format!("failed to write focus script: {err}"))?;
 
@@ -89,6 +100,103 @@ fn run() -> Result<(), String> {
         .map_err(|err| format!("failed to send notification: {err}"))?;
 
     Ok(())
+}
+
+fn resolve_herdr_bin() -> String {
+    config_var("HERDR_BIN_PATH")
+        .or_else(|| find_executable("herdr", herdr_candidate_paths()))
+        .unwrap_or_else(|| "herdr".to_string())
+}
+
+fn resolve_notifier_bin() -> String {
+    config_var("HERDR_FOCUS_NOTIFY_NOTIFIER")
+        .or_else(|| find_executable("terminal-notifier", terminal_notifier_candidate_paths()))
+        .unwrap_or_else(|| "terminal-notifier".to_string())
+}
+
+fn herdr_candidate_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home_dir) = home_dir() {
+        paths.push(home_dir.join(".local/bin/herdr"));
+    }
+    paths.push(PathBuf::from("/opt/homebrew/bin/herdr"));
+    paths.push(PathBuf::from("/usr/local/bin/herdr"));
+    paths
+}
+
+fn terminal_notifier_candidate_paths() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/opt/homebrew/bin/terminal-notifier"),
+        PathBuf::from("/usr/local/bin/terminal-notifier"),
+    ]
+}
+
+fn find_executable(name: &str, candidate_paths: Vec<PathBuf>) -> Option<String> {
+    executable_in_path(name)
+        .or_else(|| {
+            candidate_paths
+                .into_iter()
+                .find(|path| is_executable_file(path))
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn executable_in_path(name: &str) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|path| {
+        env::split_paths(&path)
+            .map(|dir| dir.join(name))
+            .find(|path| is_executable_file(path))
+    })
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from)
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn test_notification(herdr_bin: &str) -> FocusNotification {
+    let pane_id = focused_pane_id(herdr_bin).unwrap_or_else(|| "test-pane".to_string());
+    FocusNotification {
+        pane_id: pane_id.clone(),
+        status: "blocked".to_string(),
+        title: "Herdr Focus Notify test".to_string(),
+        body: format!("Click to run: {herdr_bin} agent focus {pane_id}"),
+        group: format!("herdr-{}", sanitize_group_id(&pane_id)),
+    }
+}
+
+fn focused_pane_id(herdr_bin: &str) -> Option<String> {
+    let output = Command::new(herdr_bin)
+        .arg("agent")
+        .arg("list")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let json = String::from_utf8(output.stdout).ok()?;
+    focused_pane_id_from_agent_list_json(&json).ok().flatten()
+}
+
+fn focused_pane_id_from_agent_list_json(json: &str) -> Result<Option<String>, String> {
+    let envelope: AgentListEnvelope =
+        serde_json::from_str(json).map_err(|err| format!("invalid agent list json: {err}"))?;
+
+    Ok(envelope.result.and_then(|result| {
+        result.agents.into_iter().find_map(|agent| {
+            agent
+                .focused
+                .then_some(agent.pane_id)
+                .flatten()
+                .map(|pane_id| pane_id.trim().to_string())
+                .filter(|pane_id| !pane_id.is_empty())
+        })
+    }))
 }
 
 fn notification_from_event_json(json: &str) -> Result<Option<FocusNotification>, String> {
@@ -297,16 +405,46 @@ fn write_focus_script(pane_id: &str, herdr_bin: &str) -> io::Result<PathBuf> {
     herdr_bin.hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
-    let script = format!(
-        "#!/bin/sh\nexec {} agent focus {}\n",
-        shell_quote(herdr_bin),
-        shell_quote(pane_id)
-    );
+    let debug_log_path = is_debug_enabled().then(|| state_dir.join("focus-click.log"));
+    let script = focus_script_content(pane_id, herdr_bin, debug_log_path.as_deref());
 
     fs::write(&script_path, script)?;
     make_executable(&script_path)?;
 
     Ok(script_path)
+}
+
+fn focus_script_content(pane_id: &str, herdr_bin: &str, debug_log_path: Option<&Path>) -> String {
+    let mut script = String::from("#!/bin/sh\n");
+
+    if let Some(debug_log_path) = debug_log_path {
+        let message = format!("focus notification clicked: pane_id={pane_id}");
+        script.push_str(&format!(
+            "printf '%s %s\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" {} >> {} 2>&1\n",
+            shell_quote(&message),
+            shell_quote(debug_log_path.to_string_lossy().as_ref())
+        ));
+        script.push_str(&format!(
+            "{} agent focus {} >> {} 2>&1\n",
+            shell_quote(herdr_bin),
+            shell_quote(pane_id),
+            shell_quote(debug_log_path.to_string_lossy().as_ref())
+        ));
+        script.push_str("status=$?\n");
+        script.push_str(&format!(
+            "printf '%s focus command exited with %s\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$status\" >> {} 2>&1\n",
+            shell_quote(debug_log_path.to_string_lossy().as_ref())
+        ));
+        script.push_str("exit \"$status\"\n");
+        return script;
+    }
+
+    script.push_str(&format!(
+        "exec {} agent focus {}\n",
+        shell_quote(herdr_bin),
+        shell_quote(pane_id)
+    ));
+    script
 }
 
 #[cfg(unix)]
@@ -324,8 +462,7 @@ fn make_executable(_path: &Path) -> io::Result<()> {
 }
 
 fn send_notification(notification: &FocusNotification, script_path: &Path) -> io::Result<()> {
-    let notifier = config_var("HERDR_FOCUS_NOTIFY_NOTIFIER")
-        .unwrap_or_else(|| "terminal-notifier".to_string());
+    let notifier = resolve_notifier_bin();
     let script_path_string = script_path.to_string_lossy();
     let execute = format!("sh {}", shell_quote(script_path_string.as_ref()));
 
@@ -341,7 +478,10 @@ fn send_notification(notification: &FocusNotification, script_path: &Path) -> io
         .status();
 
     match result {
-        Ok(_status) => Ok(()),
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(io::Error::other(format!(
+            "terminal-notifier exited with {status}"
+        ))),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if is_debug_enabled() {
                 eprintln!("herdr-focus-notify: terminal-notifier not found");
@@ -450,8 +590,41 @@ mod tests {
     }
 
     #[test]
+    fn finds_focused_pane_from_agent_list_json() {
+        let json = r#"{
+            "id": "cli:agent:list",
+            "result": {
+                "agents": [
+                    {"agent": "codex", "focused": false, "pane_id": "w1:p1"},
+                    {"agent": "kimi", "focused": true, "pane_id": "w1:p2"}
+                ]
+            }
+        }"#;
+
+        assert_eq!(
+            focused_pane_id_from_agent_list_json(json).unwrap(),
+            Some("w1:p2".to_string())
+        );
+    }
+
+    #[test]
     fn shell_quote_handles_apostrophes() {
         assert_eq!(shell_quote("/tmp/it's ok"), "'/tmp/it'\\''s ok'");
+    }
+
+    #[test]
+    fn focus_script_can_include_debug_click_log() {
+        let script = focus_script_content(
+            "pane ' one",
+            "/tmp/herdr bin",
+            Some(Path::new("/tmp/focus clicks.log")),
+        );
+
+        assert!(script.contains("focus notification clicked: pane_id=pane '\\'' one"));
+        assert!(script.contains(">> '/tmp/focus clicks.log' 2>&1"));
+        assert!(script.contains("'/tmp/herdr bin' agent focus 'pane '\\'' one'"));
+        assert!(script.contains("focus command exited with %s"));
+        assert!(script.contains("exit \"$status\""));
     }
 
     #[test]
