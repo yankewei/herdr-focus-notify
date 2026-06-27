@@ -153,6 +153,18 @@ fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(PathBuf::from)
 }
 
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.is_file()
+        && path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
 fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
@@ -273,9 +285,11 @@ fn notification_body(data: &EventData) -> String {
         if let Some(workspace) = workspace {
             location.push(' ');
             location.push_str(workspace);
+            if tab.is_some() {
+                location.push_str(" / ");
+            }
         }
         if let Some(tab) = tab {
-            location.push_str(" / ");
             location.push_str(tab);
         }
         lines.push(location);
@@ -367,16 +381,14 @@ fn parse_env_file(content: &str) -> HashMap<String, String> {
             continue;
         }
 
-        let Some((key, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-
-        let key = key.trim();
+        let mut parts = trimmed.splitn(2, '=');
+        let key = parts.next().unwrap_or("").trim();
+        let value = parts.next().unwrap_or("").trim();
         if key.is_empty() {
             continue;
         }
 
-        values.insert(key.to_string(), unquote_env_value(value.trim()).to_string());
+        values.insert(key.to_string(), unquote_env_value(value).to_string());
     }
 
     values
@@ -403,6 +415,7 @@ fn write_focus_script(pane_id: &str, herdr_bin: &str) -> io::Result<PathBuf> {
     let mut hasher = DefaultHasher::new();
     pane_id.hash(&mut hasher);
     herdr_bin.hash(&mut hasher);
+    is_debug_enabled().hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
     let debug_log_path = is_debug_enabled().then(|| state_dir.join("focus-click.log"));
@@ -482,12 +495,9 @@ fn send_notification(notification: &FocusNotification, script_path: &Path) -> io
         Ok(status) => Err(io::Error::other(format!(
             "terminal-notifier exited with {status}"
         ))),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            if is_debug_enabled() {
-                eprintln!("herdr-focus-notify: terminal-notifier not found");
-            }
-            Ok(())
-        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(io::Error::other(
+            "terminal-notifier not found; install it with: brew install terminal-notifier",
+        )),
         Err(err) => Err(err),
     }
 }
