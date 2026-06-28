@@ -5,7 +5,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 static CONFIG_ENV: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -74,6 +74,7 @@ fn run() -> Result<(), String> {
     }
 
     let herdr_bin = resolve_herdr_bin();
+    let notifier_bin = resolve_notifier_bin();
 
     let notification = if env::args().any(|arg| arg == "--test") {
         test_notification(&herdr_bin)
@@ -93,10 +94,10 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let script_path = write_focus_script(&notification.pane_id, &herdr_bin)
+    let script_path = write_focus_script(&notification, &herdr_bin, &notifier_bin)
         .map_err(|err| format!("failed to write focus script: {err}"))?;
 
-    send_notification(&notification, &script_path)
+    send_notification(&notification, &script_path, &notifier_bin)
         .map_err(|err| format!("failed to send notification: {err}"))?;
 
     Ok(())
@@ -110,8 +111,34 @@ fn resolve_herdr_bin() -> String {
 
 fn resolve_notifier_bin() -> String {
     config_var("HERDR_FOCUS_NOTIFY_NOTIFIER")
-        .or_else(|| find_executable("terminal-notifier", terminal_notifier_candidate_paths()))
-        .unwrap_or_else(|| "terminal-notifier".to_string())
+        .or_else(|| find_executable("alerter", alerter_candidate_paths()))
+        .or_else(|| {
+            find_executable("terminal-notifier", terminal_notifier_candidate_paths())
+        })
+        .unwrap_or_else(|| "alerter".to_string())
+}
+
+fn notifier_kind(notifier_bin: &str) -> &'static str {
+    let stem = Path::new(notifier_bin)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if stem == "alerter" {
+        "alerter"
+    } else {
+        "terminal-notifier"
+    }
+}
+
+fn alerter_candidate_paths() -> Vec<PathBuf> {
+    let mut paths = vec![
+        PathBuf::from("/opt/homebrew/bin/alerter"),
+        PathBuf::from("/usr/local/bin/alerter"),
+    ];
+    if let Some(home) = home_dir() {
+        paths.push(home.join(".local/bin/alerter"));
+    }
+    paths
 }
 
 fn herdr_candidate_paths() -> Vec<PathBuf> {
@@ -353,6 +380,15 @@ fn is_debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn alerter_timeout_secs() -> u64 {
+    parse_timeout_secs(config_var("HERDR_FOCUS_NOTIFY_TIMEOUT"))
+}
+
+fn parse_timeout_secs(raw: Option<String>) -> u64 {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(3600)
+}
+
 fn config_var(key: &str) -> Option<String> {
     env::var(key)
         .ok()
@@ -406,20 +442,25 @@ fn unquote_env_value(value: &str) -> &str {
     }
 }
 
-fn write_focus_script(pane_id: &str, herdr_bin: &str) -> io::Result<PathBuf> {
+fn write_focus_script(
+    notification: &FocusNotification,
+    herdr_bin: &str,
+    notifier_bin: &str,
+) -> io::Result<PathBuf> {
     let state_dir = env::var_os("HERDR_PLUGIN_STATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| env::temp_dir().join("herdr-focus-notify"));
     fs::create_dir_all(&state_dir)?;
 
     let mut hasher = DefaultHasher::new();
-    pane_id.hash(&mut hasher);
+    notification.pane_id.hash(&mut hasher);
     herdr_bin.hash(&mut hasher);
+    notifier_bin.hash(&mut hasher);
     is_debug_enabled().hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
     let debug_log_path = is_debug_enabled().then(|| state_dir.join("focus-click.log"));
-    let script = focus_script_content(pane_id, herdr_bin, debug_log_path.as_deref());
+    let script = focus_script_content(notification, herdr_bin, notifier_bin, debug_log_path.as_deref());
 
     fs::write(&script_path, script)?;
     make_executable(&script_path)?;
@@ -427,7 +468,92 @@ fn write_focus_script(pane_id: &str, herdr_bin: &str) -> io::Result<PathBuf> {
     Ok(script_path)
 }
 
-fn focus_script_content(pane_id: &str, herdr_bin: &str, debug_log_path: Option<&Path>) -> String {
+fn focus_script_content(
+    notification: &FocusNotification,
+    herdr_bin: &str,
+    notifier_bin: &str,
+    debug_log_path: Option<&Path>,
+) -> String {
+    match notifier_kind(notifier_bin) {
+        "alerter" => alerter_focus_script(
+            notification,
+            herdr_bin,
+            notifier_bin,
+            alerter_timeout_secs(),
+            debug_log_path,
+        ),
+        _ => terminal_notifier_focus_script(&notification.pane_id, herdr_bin, debug_log_path),
+    }
+}
+
+fn alerter_focus_script(
+    notification: &FocusNotification,
+    herdr_bin: &str,
+    notifier_bin: &str,
+    timeout_secs: u64,
+    debug_log_path: Option<&Path>,
+) -> String {
+    let title_q = shell_quote(&notification.title);
+    let body_q = shell_quote(&notification.body);
+    let group_q = shell_quote(&notification.group);
+    let pane_q = shell_quote(&notification.pane_id);
+    let herdr_q = shell_quote(herdr_bin);
+    let notifier_q = shell_quote(notifier_bin);
+    let timeout_args = if timeout_secs > 0 {
+        format!("--timeout {}", timeout_secs)
+    } else {
+        String::new()
+    };
+
+    let mut script = String::from("#!/bin/sh\n");
+    script.push_str(&format!(
+        "result=$({notifier} --title {title} --message {body} --group {group} --actions {action} --close-label {close_label} {timeout_args} 2>/dev/null)\n",
+        notifier = notifier_q,
+        title = title_q,
+        body = body_q,
+        group = group_q,
+        action = shell_quote("Focus"),
+        close_label = shell_quote("Dismiss"),
+        timeout_args = timeout_args,
+    ));
+
+    match debug_log_path {
+        Some(log_path) => {
+            let log_q = shell_quote(log_path.to_string_lossy().as_ref());
+            script.push_str(&format!(
+                "printf '%s alerter result=%s\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$result\" >> {log} 2>&1\n",
+                log = log_q,
+            ));
+            script.push_str("status=0\n");
+            script.push_str("case \"$result\" in\n");
+            script.push_str(&format!(
+                "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n    {herdr} agent focus {pane} >> {log} 2>&1\n    status=$?\n    printf '%s focus exited %s\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$status\" >> {log} 2>&1\n    ;;\n",
+                herdr = herdr_q,
+                pane = pane_q,
+                log = log_q,
+            ));
+            script.push_str("esac\n");
+            script.push_str("exit \"$status\"\n");
+        }
+        None => {
+            script.push_str("case \"$result\" in\n");
+            script.push_str(&format!(
+                "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n    exec {herdr} agent focus {pane}\n    ;;\n",
+                herdr = herdr_q,
+                pane = pane_q,
+            ));
+            script.push_str("esac\n");
+        }
+    }
+
+    script
+}
+
+fn terminal_notifier_focus_script(
+    pane_id: &str,
+    herdr_bin: &str,
+    debug_log_path: Option<&Path>,
+) -> String {
     let mut script = String::from("#!/bin/sh\n");
 
     if let Some(debug_log_path) = debug_log_path {
@@ -474,12 +600,43 @@ fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn send_notification(notification: &FocusNotification, script_path: &Path) -> io::Result<()> {
-    let notifier = resolve_notifier_bin();
+fn send_notification(
+    notification: &FocusNotification,
+    script_path: &Path,
+    notifier_bin: &str,
+) -> io::Result<()> {
+    match notifier_kind(notifier_bin) {
+        "alerter" => spawn_detached_script(script_path),
+        _ => send_via_terminal_notifier(notification, script_path, notifier_bin),
+    }
+}
+
+fn spawn_detached_script(script_path: &Path) -> io::Result<()> {
+    let script_str = script_path.to_string_lossy();
+    let cmd = format!(
+        "nohup sh {} >/dev/null 2>&1 &",
+        shell_quote(script_str.as_ref())
+    );
+
+    Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
+fn send_via_terminal_notifier(
+    notification: &FocusNotification,
+    script_path: &Path,
+    notifier_bin: &str,
+) -> io::Result<()> {
     let script_path_string = script_path.to_string_lossy();
     let execute = format!("sh {}", shell_quote(script_path_string.as_ref()));
 
-    let result = Command::new(notifier)
+    let result = Command::new(notifier_bin)
         .arg("-title")
         .arg(&notification.title)
         .arg("-message")
@@ -496,7 +653,7 @@ fn send_notification(notification: &FocusNotification, script_path: &Path) -> io
             "terminal-notifier exited with {status}"
         ))),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Err(io::Error::other(
-            "terminal-notifier not found; install it with: brew install terminal-notifier",
+            "no clickable notifier backend found; for reliable click-to-focus install alerter: brew install vjeantet/tap/alerter",
         )),
         Err(err) => Err(err),
     }
@@ -624,9 +781,17 @@ mod tests {
 
     #[test]
     fn focus_script_can_include_debug_click_log() {
+        let notification = FocusNotification {
+            pane_id: "pane ' one".to_string(),
+            status: "blocked".to_string(),
+            title: "x".to_string(),
+            body: "y".to_string(),
+            group: "g".to_string(),
+        };
         let script = focus_script_content(
-            "pane ' one",
+            &notification,
             "/tmp/herdr bin",
+            "/usr/local/bin/terminal-notifier",
             Some(Path::new("/tmp/focus clicks.log")),
         );
 
@@ -635,6 +800,95 @@ mod tests {
         assert!(script.contains("'/tmp/herdr bin' agent focus 'pane '\\'' one'"));
         assert!(script.contains("focus command exited with %s"));
         assert!(script.contains("exit \"$status\""));
+    }
+
+    fn sample_notification() -> FocusNotification {
+        FocusNotification {
+            pane_id: "w1:p3".to_string(),
+            status: "blocked".to_string(),
+            title: "Codex needs attention".to_string(),
+            body: "Needs an answer".to_string(),
+            group: "herdr-w1-p3".to_string(),
+        }
+    }
+
+    #[test]
+    fn alerter_script_invokes_alerter_and_runs_focus_on_click() {
+        let script = focus_script_content(
+            &sample_notification(),
+            "/usr/local/bin/herdr",
+            "/opt/homebrew/bin/alerter",
+            None,
+        );
+
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains("'/opt/homebrew/bin/alerter' --title 'Codex needs attention'"));
+        assert!(script.contains("--message 'Needs an answer'"));
+        assert!(script.contains("--group 'herdr-w1-p3'"));
+        assert!(script.contains("--actions 'Focus'"));
+        assert!(script.contains("--close-label 'Dismiss'"));
+        assert!(script.contains("exec '/usr/local/bin/herdr' agent focus 'w1:p3'"));
+    }
+
+    #[test]
+    fn alerter_script_includes_timeout_when_configured() {
+        let script = alerter_focus_script(
+            &sample_notification(),
+            "/usr/local/bin/herdr",
+            "/opt/homebrew/bin/alerter",
+            120,
+            None,
+        );
+
+        assert!(script.contains("--timeout 120"));
+    }
+
+    #[test]
+    fn alerter_script_omits_timeout_when_zero() {
+        let script = alerter_focus_script(
+            &sample_notification(),
+            "/usr/local/bin/herdr",
+            "/opt/homebrew/bin/alerter",
+            0,
+            None,
+        );
+
+        assert!(!script.contains("--timeout"));
+    }
+
+    #[test]
+    fn alerter_debug_script_logs_result() {
+        let script = alerter_focus_script(
+            &sample_notification(),
+            "/usr/local/bin/herdr",
+            "/opt/homebrew/bin/alerter",
+            1800,
+            Some(Path::new("/tmp/click.log")),
+        );
+
+        assert!(script.contains("alerter result="));
+        assert!(script.contains(">> '/tmp/click.log' 2>&1"));
+        assert!(script.contains("status=0\n"));
+        assert!(script.contains("focus exited %s"));
+    }
+
+    #[test]
+    fn notifier_kind_detects_alerter() {
+        assert_eq!(notifier_kind("/opt/homebrew/bin/alerter"), "alerter");
+        assert_eq!(notifier_kind("alerter"), "alerter");
+        assert_eq!(
+            notifier_kind("/opt/homebrew/bin/terminal-notifier"),
+            "terminal-notifier"
+        );
+        assert_eq!(notifier_kind("terminal-notifier"), "terminal-notifier");
+    }
+
+    #[test]
+    fn parse_timeout_secs_defaults_and_overrides() {
+        assert_eq!(parse_timeout_secs(None), 3600);
+        assert_eq!(parse_timeout_secs(Some("abc".to_string())), 3600);
+        assert_eq!(parse_timeout_secs(Some("0".to_string())), 0);
+        assert_eq!(parse_timeout_secs(Some("120".to_string())), 120);
     }
 
     #[test]
