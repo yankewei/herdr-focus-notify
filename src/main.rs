@@ -94,6 +94,10 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if should_skip_notification(&notification.pane_id, &herdr_bin) {
+        return Ok(());
+    }
+
     let script_path = write_focus_script(&notification, &herdr_bin, &notifier_bin)
         .map_err(|err| format!("failed to write focus script: {err}"))?;
 
@@ -203,6 +207,69 @@ fn test_notification(herdr_bin: &str) -> FocusNotification {
         body: format!("Click to run: {herdr_bin} agent focus {pane_id}"),
         group: format!("herdr-{}", sanitize_group_id(&pane_id)),
     }
+}
+
+fn pane_is_focused(pane_id: &str, herdr_bin: &str) -> bool {
+    focused_pane_id(herdr_bin)
+        .map(|focused| focused == pane_id)
+        .unwrap_or(false)
+}
+
+fn should_skip_notification(pane_id: &str, herdr_bin: &str) -> bool {
+    if !pane_is_focused(pane_id, herdr_bin) {
+        return false;
+    }
+
+    match (herdr_bundle_id(), frontmost_bundle_id()) {
+        (Some(herdr), Some(frontmost)) => herdr == frontmost,
+        _ => true,
+    }
+}
+
+fn herdr_bundle_id() -> Option<String> {
+    bundle_id_from_app(activate_app().as_deref())
+}
+
+fn frontmost_bundle_id() -> Option<String> {
+    frontmost_bundle_id_via_applescript()
+}
+
+fn frontmost_bundle_id_via_applescript() -> Option<String> {
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to return bundle identifier of first application process whose frontmost is true")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn bundle_id_from_app(app: Option<&str>) -> Option<String> {
+    let app = app?;
+    let escaped = app.replace('"', "\\\"");
+    let script = format!("id of app \"{escaped}\"");
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn focused_pane_id(herdr_bin: &str) -> Option<String> {
@@ -386,14 +453,6 @@ fn activate_app() -> Option<String> {
     config_var("HERDR_FOCUS_NOTIFY_ACTIVATE_APP")
 }
 
-fn activate_bundle_id() -> Option<String> {
-    config_var("HERDR_FOCUS_NOTIFY_ACTIVATE_BUNDLE_ID")
-}
-
-fn alerter_sender_bundle_id() -> Option<String> {
-    config_var("HERDR_FOCUS_NOTIFY_SENDER")
-}
-
 fn parse_timeout_secs(raw: Option<String>) -> u64 {
     raw.and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(3600)
@@ -467,8 +526,6 @@ fn write_focus_script(
     herdr_bin.hash(&mut hasher);
     notifier_bin.hash(&mut hasher);
     activate_app().hash(&mut hasher);
-    activate_bundle_id().hash(&mut hasher);
-    alerter_sender_bundle_id().hash(&mut hasher);
     is_debug_enabled().hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
@@ -498,7 +555,6 @@ fn focus_script_content(
             herdr_bin,
             notifier_bin,
             alerter_timeout_secs(),
-            alerter_sender_bundle_id().as_deref(),
             activation_command().as_deref(),
             debug_log_path,
         ),
@@ -516,7 +572,6 @@ fn alerter_focus_script(
     herdr_bin: &str,
     notifier_bin: &str,
     timeout_secs: u64,
-    sender_bundle_id: Option<&str>,
     activate_command: Option<&str>,
     debug_log_path: Option<&Path>,
 ) -> String {
@@ -526,9 +581,6 @@ fn alerter_focus_script(
     let pane_q = shell_quote(&notification.pane_id);
     let herdr_q = shell_quote(herdr_bin);
     let notifier_q = shell_quote(notifier_bin);
-    let sender_args = sender_bundle_id
-        .map(|sender| format!(" --sender {}", shell_quote(sender)))
-        .unwrap_or_default();
     let timeout_args = if timeout_secs > 0 {
         format!(" --timeout {}", timeout_secs)
     } else {
@@ -537,7 +589,7 @@ fn alerter_focus_script(
 
     let mut script = String::from("#!/bin/sh\n");
     script.push_str(&format!(
-        "result=$({notifier} --title {title} --message {body} --group {group} --actions {action} --close-label {close_label}{timeout_args}{sender_args} 2>/dev/null)\n",
+        "result=$({notifier} --title {title} --message {body} --group {group} --actions {action} --close-label {close_label}{timeout_args} 2>/dev/null)\n",
         notifier = notifier_q,
         title = title_q,
         body = body_q,
@@ -545,7 +597,6 @@ fn alerter_focus_script(
         action = shell_quote("Focus"),
         close_label = shell_quote("Dismiss"),
         timeout_args = timeout_args,
-        sender_args = sender_args,
     ));
 
     match debug_log_path {
@@ -598,21 +649,15 @@ fn activation_script(activate_command: Option<&str>, log_q: Option<&str>) -> Str
 }
 
 fn activation_command() -> Option<String> {
-    activation_command_from(activate_app(), activate_bundle_id())
+    activate_app().map(activation_command_from)
 }
 
-fn activation_command_from(app: Option<String>, bundle_id: Option<String>) -> Option<String> {
-    if let Some(bundle_id) = bundle_id {
-        return Some(format!("open -b {}", shell_quote(&bundle_id)));
+fn activation_command_from(app: String) -> String {
+    if app.contains('/') {
+        format!("open {}", shell_quote(&app))
+    } else {
+        format!("open -a {}", shell_quote(&app))
     }
-
-    app.map(|app| {
-        if app.contains('/') {
-            format!("open {}", shell_quote(&app))
-        } else {
-            format!("open -a {}", shell_quote(&app))
-        }
-    })
 }
 
 fn terminal_notifier_focus_script(
@@ -910,7 +955,6 @@ mod tests {
             120,
             None,
             None,
-            None,
         );
 
         assert!(script.contains("--timeout 120"));
@@ -925,7 +969,6 @@ mod tests {
             0,
             None,
             None,
-            None,
         );
 
         assert!(!script.contains("--timeout"));
@@ -938,7 +981,6 @@ mod tests {
             "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             1800,
-            None,
             None,
             Some(Path::new("/tmp/click.log")),
         );
@@ -958,29 +1000,12 @@ mod tests {
             "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             3600,
-            None,
             Some("open -a 'kitty'"),
             None,
         );
 
-        assert!(!script.contains("--sender"));
         assert!(script.contains("open -a 'kitty' >/dev/null 2>&1"));
         assert!(script.contains("exec '/usr/local/bin/herdr' agent focus 'w1:p3'"));
-    }
-
-    #[test]
-    fn alerter_script_includes_sender_only_when_explicitly_configured() {
-        let script = alerter_focus_script(
-            &sample_notification(),
-            "/usr/local/bin/herdr",
-            "/opt/homebrew/bin/alerter",
-            3600,
-            Some("net.kovidgoyal.kitty"),
-            None,
-            None,
-        );
-
-        assert!(script.contains("--sender 'net.kovidgoyal.kitty'"));
     }
 
     #[test]
@@ -1011,21 +1036,14 @@ mod tests {
     }
 
     #[test]
-    fn activation_command_opens_app_names_paths_and_bundle_ids() {
+    fn activation_command_opens_app_names_and_paths() {
         assert_eq!(
-            activation_command_from(Some("kitty".to_string()), None),
-            Some("open -a 'kitty'".to_string())
+            activation_command_from("kitty".to_string()),
+            "open -a 'kitty'".to_string()
         );
         assert_eq!(
-            activation_command_from(Some("/Applications/kitty.app".to_string()), None),
-            Some("open '/Applications/kitty.app'".to_string())
-        );
-        assert_eq!(
-            activation_command_from(
-                Some("kitty".to_string()),
-                Some("net.kovidgoyal.kitty".to_string())
-            ),
-            Some("open -b 'net.kovidgoyal.kitty'".to_string())
+            activation_command_from("/Applications/kitty.app".to_string()),
+            "open '/Applications/kitty.app'".to_string()
         );
     }
 

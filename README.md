@@ -1,133 +1,67 @@
 # Herdr Focus Notify
 
-Clickable macOS notifications that focus the matching Herdr agent pane.
+当 Herdr agent 需要关注（`blocked`）或完成（`done`）时，发送可点击的 macOS 通知。点击通知会聚焦到对应的 Herdr pane。
 
-Herdr already has native notifications. This plugin is for the missing click target: when a Herdr agent becomes `blocked` or `done`, it sends one macOS notification. Clicking the notification body or the `Focus` action runs:
+通知只会在你**没有在看这个 pane** 时发送：
 
-```bash
-open <configured terminal app>
-herdr agent focus <pane_id>
-```
+- 你当前在其它 App（Herdr 不在前台）
+- 你在 Herdr 里，但聚焦的是另一个 pane
 
-## Prerequisites
+## 前提条件
 
-- macOS.
-- Herdr `0.7.0` or newer.
-- [alerter](https://github.com/vjeantet/alerter) for reliable click callbacks.
-- Optional but recommended: the bundle id or `.app` path for the terminal app that runs Herdr, such as kitty.
+- macOS
+- Herdr `0.7.0` 或更新版本
+- [alerter](https://github.com/vjeantet/alerter)：用于显示可点击通知
 
-Install alerter:
+安装 alerter：
 
 ```bash
 brew install vjeantet/tap/alerter
 ```
 
-The legacy `terminal-notifier` backend is display-only on modern macOS because its `-execute` callback is silently dropped on macOS 12+.
+## 安装
 
-## Herdr Config
-
-Turn off Herdr's native toast delivery to avoid duplicate notifications. Add this to `~/.config/herdr/config.toml`:
-
-```toml
-[ui.toast]
-delivery = "off"
-```
-
-Reload Herdr after changing the config:
-
-```bash
-herdr server reload-config
-```
-
-## Plugin Config
-
-The plugin reads optional settings from its Herdr plugin config directory. You can find that directory with:
-
-```bash
-herdr plugin config-dir herdr-focus-notify
-```
-
-Create a `.env` file there when you want terminal activation or debugging.
-
-Recommended kitty setup:
-
-```env
-HERDR_FOCUS_NOTIFY_NOTIFIER=/opt/homebrew/bin/alerter
-HERDR_FOCUS_NOTIFY_ACTIVATE_BUNDLE_ID=net.kovidgoyal.kitty
-HERDR_FOCUS_NOTIFY_TIMEOUT=3600
-```
-
-You can also use an app path or app name:
-
-```env
-HERDR_FOCUS_NOTIFY_ACTIVATE_APP=/Applications/kitty.app
-# or:
-HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
-```
-
-Leave `HERDR_FOCUS_NOTIFY_SENDER` unset unless you intentionally want macOS to treat the notification as coming from a different app. The activation setting is enough to open the terminal app before focusing the pane.
-
-Useful optional settings:
-
-```env
-# Print diagnostic output to focus-click.log in the plugin state dir.
-HERDR_FOCUS_NOTIFY_DEBUG=1
-
-# Defaults to blocked,done.
-HERDR_FOCUS_NOTIFY_STATUSES=blocked,done
-
-# 0 keeps alerter notifications until dismissed. Default 3600.
-HERDR_FOCUS_NOTIFY_TIMEOUT=3600
-```
-
-See `.env.example` for all supported settings.
-
-## Installation
-
-Install and enable the plugin:
+本地构建并链接：
 
 ```bash
 cargo build --release
 herdr plugin link .
 ```
 
-Or install from GitHub:
+或从 GitHub 安装：
 
 ```bash
 herdr plugin install yankewei/herdr-focus-notify
 ```
 
-After it is enabled, Herdr provides the plugin context and Herdr binary path. The plugin also checks common macOS locations for the notifier binary. Set `HERDR_FOCUS_NOTIFY_NOTIFIER` if your alerter binary is elsewhere.
+## 配置
 
-## Test
-
-Run the test action:
+找到插件配置目录：
 
 ```bash
-herdr plugin action invoke test --plugin herdr-focus-notify
+herdr plugin config-dir herdr-focus-notify
 ```
 
-## Troubleshooting
+在该目录下创建 `.env` 文件。
 
-If two notifications appear for one agent state change, Herdr native toast delivery is still enabled. Set:
-
-```toml
-[ui.toast]
-delivery = "off"
-```
-
-If notifications do not appear, install alerter and point the plugin to it:
+### 推荐配置
 
 ```env
 HERDR_FOCUS_NOTIFY_NOTIFIER=/opt/homebrew/bin/alerter
+HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
 ```
 
-If clicking focuses the pane but does not bring your terminal app forward, set `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` or `HERDR_FOCUS_NOTIFY_ACTIVATE_BUNDLE_ID`.
+`ACTIVATE_APP` 填 app 名称（如 `kitty`）、`.app` 路径（如 `/Applications/kitty.app`）都可以，比 bundle id 更容易找到。
 
-If clicking does nothing, enable debug logging:
+### 配置项
 
-```env
-HERDR_FOCUS_NOTIFY_DEBUG=1
-```
+| 变量 | 说明 | 默认值 |
+|---|---|---|
+| `HERDR_FOCUS_NOTIFY_ENABLED` | 是否启用插件 | `1` |
+| `HERDR_FOCUS_NOTIFY_STATUSES` | 触发通知的状态，逗号分隔 | `blocked,done` |
+| `HERDR_FOCUS_NOTIFY_NOTIFIER` | 通知后端路径 | 自动查找 `alerter` |
+| `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` | 点击通知时激活的终端 app 名或 `.app` 路径 | 无 |
+| `HERDR_FOCUS_NOTIFY_TIMEOUT` | 通知自动消失时间（秒），`0` 表示不自动消失 | `3600` |
+| `HERDR_FOCUS_NOTIFY_DEBUG` | 是否开启调试日志 | `0` |
 
-Then inspect `focus-click.log` inside the plugin state directory. It records the alerter result, terminal activation exit status, and `herdr agent focus` exit status.
+`ACTIVATE_APP` 用于点击通知时把终端 App 提到前台，同时也用来判断你是否离开了 Herdr。
