@@ -11,7 +11,7 @@ The plugin manifest is in [`herdr-plugin.toml`](herdr-plugin.toml). The binary i
 | Command | Purpose |
 |---|---|
 | `cargo build --release` | Build the release binary to `target/release/herdr-focus-notify`. This is exactly what the plugin manifest uses. |
-| `cargo test` | Run the in-file unit tests. |
+| `cargo test` | Run unit and integration tests. |
 | `cargo fmt -- --check` | Check formatting. |
 | `cargo clippy --all-targets --all-features -- -D warnings` | Lint; CI treats warnings as errors. |
 | `herdr plugin link .` | Install the plugin locally from the repo root. |
@@ -25,7 +25,9 @@ CI runs on `macos-latest` and executes all of the above in order (see [`.github/
 .
 ├── Cargo.toml          # Rust package metadata; minimal dependencies (serde, serde_json)
 ├── herdr-plugin.toml   # Herdr plugin manifest: build command, actions, event subscriptions
-├── src/main.rs         # Entire implementation and unit tests
+├── src/main.rs         # Thin CLI/plugin entry point
+├── src/*.rs            # Focused modules for CLI, config, event parsing, focus checks, scripts, and notifier delivery
+├── tests/cli_test.rs   # Process-level CLI contract tests
 ├── .env.example        # Documented configuration template for plugin users
 ├── README.md           # English documentation
 └── README.zh-CN.md     # Chinese documentation
@@ -35,10 +37,11 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
 
 ## Architecture and Control Flow
 
-1. **Entry point**: `main()` calls `run()` and only prints errors if `HERDR_FOCUS_NOTIFY_DEBUG=1` is enabled.
+1. **Entry point**: `main()` calls `run()`, prints real errors to stderr, and returns a non-zero exit code.
 2. **Event source**:
    - In normal mode, the binary reads the Herdr event from the `HERDR_PLUGIN_EVENT_JSON` environment variable.
    - In test mode (`--test` CLI arg), it fabricates a notification for the currently focused pane.
+   - `--help` and `--version` print to stdout before plugin setup.
 3. **Notification decision**:
    - Only `blocked` and `done` statuses produce notifications unless overridden by `HERDR_FOCUS_NOTIFY_STATUSES`.
    - The notification is skipped if the target pane is already focused **and** the frontmost macOS application belongs to the same bundle ID as the configured `ACTIVATE_APP` (see `should_skip_from_focus_and_bundles`). If either check fails, the plugin sends the notification to avoid missing a state change.
@@ -50,7 +53,8 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
    - The script name is a hash of the notification fields plus config, so repeated identical events reuse the same script path.
    - The script is made executable with mode `0o700`.
 6. **Notification delivery**:
-   - The script is spawned detached via `nohup sh ... &`. The script itself calls `alerter`, then runs `herdr agent focus <pane>` if the user clicks the notification.
+   - Normal plugin events spawn the script detached via `nohup sh ... &`. The script itself calls `alerter`, then runs `herdr agent focus <pane>` if the user clicks the notification.
+   - `--test` runs the generated script in the foreground so notifier failures surface through stderr and a non-zero exit code.
 
 ## Configuration
 
@@ -71,7 +75,7 @@ Important: `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` values containing `/` are passed to
 
 ## Code Patterns and Conventions
 
-- **Single-file crate**: All logic and tests live in `src/main.rs`.
+- **Module boundaries**: `src/main.rs` stays thin; parsing, config, focus checks, notifier delivery, shell script generation, and small utilities live in separate modules.
 - **Error style**: Top-level functions that can fail return `Result<T, String>` with prefixed messages (e.g. `"failed to write focus script: {err}"`).
 - **Option-heavy parsing**: Event and CLI JSON fields are mostly optional; the code uses `Option<T>` everywhere and falls back to defaults or skips silently.
 - **Shell quoting**: `shell_quote()` wraps values in single quotes and escapes embedded single quotes with `'\''`.
@@ -80,7 +84,7 @@ Important: `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` values containing `/` are passed to
 
 ## Testing
 
-- Tests are inline under `#[cfg(test)] mod tests`.
+- Unit tests are inline under each module's `#[cfg(test)] mod tests`; process-level CLI behavior lives under `tests/`.
 - Run with `cargo test`.
 - Tests cover JSON parsing, notification body construction, shell quoting, focus script generation, and skip logic.
 - Some runtime behavior (AppleScript bundle-ID detection, actual alerter invocation, `herdr agent list`) cannot be exercised in CI and is only validated manually on macOS.
@@ -88,8 +92,8 @@ Important: `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` values containing `/` are passed to
 ## Important Gotchas
 
 - **macOS only**: The plugin manifest declares `platforms = ["macos"]`. The binary uses AppleScript (`osascript`) and macOS-specific app/bundle APIs; it will not behave correctly on other platforms.
-- **Silent failure by design**: Errors in `run()` are swallowed unless debug mode is on. When editing error paths, consider whether the failure should surface to Herdr plugin logs.
+- **No-event quiet path**: A normal plugin invocation without `HERDR_PLUGIN_EVENT_JSON` exits quietly with `0`. Real configuration, parsing, script, and notifier errors should surface through stderr and non-zero exit codes.
 - **Skip logic is conservative**: A notification is only suppressed when the plugin can *confirm* the pane is focused and the frontmost app matches. Any ambiguity (missing bundle ID, AppleScript failure, missing `ACTIVATE_APP`) results in a notification being sent.
 - **State directory hygiene**: Generated scripts are keyed by a hash of notification content and config. They are not automatically cleaned up; over time the state directory may accumulate scripts.
 - **`herdr-plugin.toml` is the source of truth for execution**: Herdr invokes `target/release/herdr-focus-notify` directly for events and actions, not `cargo run`. The binary must be built before the plugin action/event works.
-- **Env file parsing is custom**: `parse_env_file()` strips comments/empty lines, splits on the first `=`, trims keys and values, and removes matching outer `"` or `'` quotes. It does not support variable interpolation, export prefixes, or escaped quotes.
+- **Env file parsing is custom**: `parse_env_file()` supports `KEY=value`, optional `export KEY=value`, quoted values, double-quoted escapes for common whitespace characters, and unquoted inline comments. It does not support variable interpolation.

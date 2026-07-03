@@ -36,6 +36,16 @@ Or install from GitHub:
 herdr plugin install yankewei/herdr-focus-notify
 ```
 
+## CLI
+
+```bash
+herdr-focus-notify --help
+herdr-focus-notify --version
+herdr-focus-notify --test
+```
+
+`--help` and `--version` print to stdout. `--test` sends a foreground test notification. Configuration or notification backend failures are printed to stderr and return a non-zero exit code. Normal plugin invocations without `HERDR_PLUGIN_EVENT_JSON` still exit quietly with `0`.
+
 ## Configuration
 
 Find the plugin config directory:
@@ -45,6 +55,8 @@ herdr plugin config-dir herdr-focus-notify
 ```
 
 Create a `.env` file in that directory.
+
+The `.env` parser supports `KEY=value`, optional `export KEY=value`, single-quoted values, double-quoted values, and inline comments after unquoted values.
 
 ### Recommended
 

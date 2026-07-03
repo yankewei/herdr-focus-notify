@@ -36,6 +36,16 @@ herdr plugin link .
 herdr plugin install yankewei/herdr-focus-notify
 ```
 
+## CLI
+
+```bash
+herdr-focus-notify --help
+herdr-focus-notify --version
+herdr-focus-notify --test
+```
+
+`--help` 和 `--version` 会输出到 stdout。`--test` 会发送一条前台测试通知。配置错误或通知后端错误会输出到 stderr，并返回非零退出码。普通插件调用如果没有 `HERDR_PLUGIN_EVENT_JSON`，仍会安静地以 `0` 退出。
+
 ## 配置
 
 找到插件配置目录：
@@ -45,6 +55,8 @@ herdr plugin config-dir herdr-focus-notify
 ```
 
 在该目录下创建 `.env` 文件。
+
+`.env` 解析支持 `KEY=value`、可选的 `export KEY=value`、单引号值、双引号值，以及未加引号值后面的行尾注释。
 
 ### 推荐配置
 
