@@ -41,6 +41,10 @@ pub(crate) fn should_skip_notification(pane_id: &str, herdr_bin: &str) -> bool {
     )
 }
 
+pub(crate) fn should_clear_notification_on_focus() -> bool {
+    configured_app_is_frontmost(herdr_bundle_id(), frontmost_bundle_id())
+}
+
 fn pane_is_focused(pane_id: &str, herdr_bin: &str) -> bool {
     focused_pane_id(herdr_bin)
         .map(|focused| focused == pane_id)
@@ -124,13 +128,19 @@ fn focused_pane_id_from_agent_list_json(json: &str) -> Result<Option<String>, St
     }))
 }
 
+fn configured_app_is_frontmost(
+    herdr_bundle_id: Option<String>,
+    frontmost_bundle_id: Option<String>,
+) -> bool {
+    matches!((herdr_bundle_id, frontmost_bundle_id), (Some(herdr), Some(frontmost)) if herdr == frontmost)
+}
+
 fn should_skip_from_focus_and_bundles(
     pane_is_focused: bool,
     herdr_bundle_id: Option<String>,
     frontmost_bundle_id: Option<String>,
 ) -> bool {
-    pane_is_focused
-        && matches!((herdr_bundle_id, frontmost_bundle_id), (Some(herdr), Some(frontmost)) if herdr == frontmost)
+    pane_is_focused && configured_app_is_frontmost(herdr_bundle_id, frontmost_bundle_id)
 }
 
 #[cfg(test)]
@@ -180,6 +190,22 @@ mod tests {
         assert!(!should_skip_from_focus_and_bundles(
             false,
             Some("com.example.Herdr".to_string()),
+            Some("com.example.Herdr".to_string())
+        ));
+    }
+
+    #[test]
+    fn confirms_configured_app_is_frontmost_only_for_matching_bundle_ids() {
+        assert!(configured_app_is_frontmost(
+            Some("com.example.Herdr".to_string()),
+            Some("com.example.Herdr".to_string())
+        ));
+        assert!(!configured_app_is_frontmost(
+            Some("com.example.Herdr".to_string()),
+            Some("com.apple.Terminal".to_string())
+        ));
+        assert!(!configured_app_is_frontmost(
+            None,
             Some("com.example.Herdr".to_string())
         ));
     }

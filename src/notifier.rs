@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::executable::{executable_in_path, find_executable, home_dir, is_executable_file};
-use crate::util::shell_quote;
+use crate::util::{notification_group_id, shell_quote};
 
 pub(crate) fn resolve_notifier_bin() -> Result<String, String> {
     if let Some(configured) = crate::config::config_var("HERDR_FOCUS_NOTIFY_NOTIFIER") {
@@ -26,6 +26,22 @@ pub(crate) fn send_notification(script_path: &Path, foreground: bool) -> io::Res
         run_script_foreground(script_path)
     } else {
         spawn_detached_script(script_path)
+    }
+}
+
+pub(crate) fn remove_notification(pane_id: &str, notifier_bin: &str) -> io::Result<()> {
+    let group = notification_group_id(pane_id);
+
+    match Command::new(notifier_bin)
+        .arg("--remove")
+        .arg(group)
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(io::Error::other(format!(
+            "notification removal exited with {status}"
+        ))),
+        Err(err) => Err(err),
     }
 }
 

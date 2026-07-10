@@ -1,5 +1,4 @@
 use std::collections::hash_map::DefaultHasher;
-use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -7,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{activate_app, alerter_timeout_secs, is_debug_enabled};
 use crate::notification::FocusNotification;
+use crate::state::{cleared_notification_marker_path, plugin_state_dir};
 use crate::util::shell_quote;
 
 pub(crate) fn write_focus_script(
@@ -14,9 +14,7 @@ pub(crate) fn write_focus_script(
     herdr_bin: &str,
     notifier_bin: &str,
 ) -> io::Result<PathBuf> {
-    let state_dir = env::var_os("HERDR_PLUGIN_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env::temp_dir().join("herdr-focus-notify"));
+    let state_dir = plugin_state_dir();
     fs::create_dir_all(&state_dir)?;
 
     let mut hasher = DefaultHasher::new();
@@ -77,6 +75,8 @@ fn alerter_focus_script(
     let pane_q = shell_quote(&notification.pane_id);
     let herdr_q = shell_quote(herdr_bin);
     let notifier_q = shell_quote(notifier_bin);
+    let cleared_marker = cleared_notification_marker_path(&notification.pane_id);
+    let cleared_marker_q = shell_quote(cleared_marker.to_string_lossy().as_ref());
     let app_icon_args = notification
         .app_icon
         .as_ref()
@@ -89,6 +89,10 @@ fn alerter_focus_script(
     };
 
     let mut script = String::from("#!/bin/sh\n");
+    script.push_str(&format!(
+        "[ -e {cleared_marker} ] && exit 0\n",
+        cleared_marker = cleared_marker_q
+    ));
     script.push_str(&format!(
         "result=$({notifier} --title {title} --message {body} --group {group}{app_icon_args} --actions {action} --close-label {close_label}{timeout_args} 2>/dev/null)\n",
         notifier = notifier_q,
@@ -238,6 +242,11 @@ mod tests {
         assert!(script.contains("--app-icon '/tmp/codex icon.png'"));
         assert!(script.contains("--actions 'Focus'"));
         assert!(script.contains("--close-label 'Dismiss'"));
+        assert!(script.contains(".cleared' ] && exit 0"));
+        assert!(
+            script.find(".cleared' ] && exit 0").unwrap()
+                < script.find("'/opt/homebrew/bin/alerter' --title").unwrap()
+        );
         assert!(script.contains("notifier_status=$?"));
         assert!(script.contains("exit \"$notifier_status\""));
         assert!(script.contains("Focus|@ACTIONCLICKED|@CONTENTCLICKED)"));

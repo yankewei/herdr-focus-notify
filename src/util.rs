@@ -11,6 +11,10 @@ pub(crate) fn sanitize_group_id(value: &str) -> String {
         .collect()
 }
 
+pub(crate) fn notification_group_id(pane_id: &str) -> String {
+    format!("herdr-{}", sanitize_group_id(pane_id))
+}
+
 pub(crate) fn shell_quote(value: &str) -> String {
     let mut quoted = String::from("'");
     for ch in value.chars() {

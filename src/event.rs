@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 use crate::icons::agent_icon_path;
 use crate::notification::FocusNotification;
-use crate::util::sanitize_group_id;
+use crate::util::notification_group_id;
 
 #[derive(Debug, Deserialize)]
 struct PluginEvent {
@@ -39,13 +39,7 @@ pub(crate) fn notification_from_event_json(
         return Ok(None);
     }
 
-    let Some(pane_id) = data
-        .pane_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-    else {
+    let Some(pane_id) = pane_id_from_event_data(&data) else {
         return Ok(None);
     };
 
@@ -66,7 +60,7 @@ pub(crate) fn notification_from_event_json(
     };
 
     let body = notification_body(&data);
-    let group = format!("herdr-{}", sanitize_group_id(&pane_id));
+    let group = notification_group_id(&pane_id);
 
     Ok(Some(FocusNotification {
         pane_id,
@@ -76,6 +70,21 @@ pub(crate) fn notification_from_event_json(
         group,
         app_icon,
     }))
+}
+
+pub(crate) fn focused_pane_id_from_event_json(json: &str) -> Result<Option<String>, String> {
+    let event: PluginEvent =
+        serde_json::from_str(json).map_err(|err| format!("invalid event json: {err}"))?;
+
+    Ok(event.data.as_ref().and_then(pane_id_from_event_data))
+}
+
+fn pane_id_from_event_data(data: &EventData) -> Option<String> {
+    data.pane_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn notification_body(data: &EventData) -> String {
@@ -178,5 +187,20 @@ mod tests {
         }"#;
 
         assert!(notification_from_event_json(json).unwrap().is_none());
+    }
+
+    #[test]
+    fn extracts_pane_id_from_focus_event() {
+        let json = r#"{
+            "event": "pane.focused",
+            "data": {
+                "pane_id": " w1:p2 "
+            }
+        }"#;
+
+        assert_eq!(
+            focused_pane_id_from_event_json(json).unwrap(),
+            Some("w1:p2".to_string())
+        );
     }
 }

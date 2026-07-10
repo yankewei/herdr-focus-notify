@@ -1,6 +1,10 @@
-use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::state::plugin_state_dir;
+
+static ICON_WRITE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn agent_icon_path(names: &[Option<&str>]) -> Option<String> {
     names
@@ -188,16 +192,20 @@ fn write_embedded_icon(icon: &AgentIcon) -> Option<String> {
     fs::create_dir_all(&dir).ok()?;
 
     let path = dir.join(icon.file);
-    fs::write(&path, icon.bytes).ok()?;
+    let temp_path = dir.join(format!(
+        ".{}-{}-{}",
+        icon.file,
+        std::process::id(),
+        ICON_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&temp_path, icon.bytes).ok()?;
+    fs::rename(temp_path, &path).ok()?;
 
     Some(path.to_string_lossy().into_owned())
 }
 
 fn icon_state_dir() -> PathBuf {
-    env::var_os("HERDR_PLUGIN_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env::temp_dir().join("herdr-focus-notify"))
-        .join("icons")
+    plugin_state_dir().join("icons")
 }
 
 fn normalize_agent_name(name: &str) -> String {

@@ -7,6 +7,7 @@ mod icons;
 mod notification;
 mod notifier;
 mod script;
+mod state;
 mod util;
 
 use std::env;
@@ -14,11 +15,12 @@ use std::process::ExitCode;
 
 use cli::{parse_cli_args, print_usage, CliAction};
 use config::{is_enabled, status_is_enabled};
-use event::notification_from_event_json;
+use event::{focused_pane_id_from_event_json, notification_from_event_json};
 use executable::resolve_herdr_bin;
-use focus::{should_skip_notification, test_notification};
-use notifier::{resolve_notifier_bin, send_notification};
+use focus::{should_clear_notification_on_focus, should_skip_notification, test_notification};
+use notifier::{remove_notification, resolve_notifier_bin, send_notification};
 use script::write_focus_script;
+use state::{mark_notification_cleared, reset_notification_clearance};
 
 fn main() -> ExitCode {
     match run() {
@@ -59,6 +61,22 @@ fn run() -> Result<(), String> {
                 Err(_) => return Ok(()),
             };
 
+            if env::var("HERDR_PLUGIN_EVENT").as_deref() == Ok("pane.focused") {
+                let Some(pane_id) = focused_pane_id_from_event_json(&event_json)? else {
+                    return Ok(());
+                };
+
+                if should_clear_notification_on_focus() {
+                    mark_notification_cleared(&pane_id)
+                        .map_err(|err| format!("failed to mark notification as cleared: {err}"))?;
+                    let notifier_bin = resolve_notifier_bin()?;
+                    remove_notification(&pane_id, &notifier_bin)
+                        .map_err(|err| format!("failed to remove notification: {err}"))?;
+                }
+
+                return Ok(());
+            }
+
             match notification_from_event_json(&event_json)? {
                 Some(notification) => notification,
                 None => return Ok(()),
@@ -74,6 +92,9 @@ fn run() -> Result<(), String> {
     if should_skip_notification(&notification.pane_id, &herdr_bin) {
         return Ok(());
     }
+
+    reset_notification_clearance(&notification.pane_id)
+        .map_err(|err| format!("failed to reset notification clearance: {err}"))?;
 
     let notifier_bin = resolve_notifier_bin()?;
     let script_path = write_focus_script(&notification, &herdr_bin, &notifier_bin)
