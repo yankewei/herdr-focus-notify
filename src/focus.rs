@@ -21,6 +21,13 @@ struct AgentInfo {
     pane_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotificationDecision {
+    Skip,
+    Send,
+    SendWithVisibilityMonitor,
+}
+
 pub(crate) fn test_notification(herdr_bin: &str) -> FocusNotification {
     let pane_id = focused_pane_id(herdr_bin).unwrap_or_else(|| "test-pane".to_string());
     FocusNotification {
@@ -33,8 +40,8 @@ pub(crate) fn test_notification(herdr_bin: &str) -> FocusNotification {
     }
 }
 
-pub(crate) fn should_skip_notification(pane_id: &str, herdr_bin: &str) -> bool {
-    should_skip_from_focus_and_bundles(
+pub(crate) fn notification_decision(pane_id: &str, herdr_bin: &str) -> NotificationDecision {
+    notification_decision_from_focus_and_bundles(
         pane_is_focused(pane_id, herdr_bin),
         herdr_bundle_id(),
         frontmost_bundle_id(),
@@ -135,12 +142,20 @@ fn configured_app_is_frontmost(
     matches!((herdr_bundle_id, frontmost_bundle_id), (Some(herdr), Some(frontmost)) if herdr == frontmost)
 }
 
-fn should_skip_from_focus_and_bundles(
+fn notification_decision_from_focus_and_bundles(
     pane_is_focused: bool,
     herdr_bundle_id: Option<String>,
     frontmost_bundle_id: Option<String>,
-) -> bool {
-    pane_is_focused && configured_app_is_frontmost(herdr_bundle_id, frontmost_bundle_id)
+) -> NotificationDecision {
+    if !pane_is_focused {
+        return NotificationDecision::Send;
+    }
+
+    match (herdr_bundle_id, frontmost_bundle_id) {
+        (Some(herdr), Some(frontmost)) if herdr == frontmost => NotificationDecision::Skip,
+        (Some(_), Some(_)) => NotificationDecision::SendWithVisibilityMonitor,
+        _ => NotificationDecision::Send,
+    }
 }
 
 #[cfg(test)]
@@ -166,32 +181,47 @@ mod tests {
     }
 
     #[test]
-    fn skips_only_when_same_pane_and_frontmost_app_are_confirmed() {
-        assert!(should_skip_from_focus_and_bundles(
-            true,
-            Some("com.example.Herdr".to_string()),
-            Some("com.example.Herdr".to_string())
-        ));
-        assert!(!should_skip_from_focus_and_bundles(
-            true,
-            Some("com.example.Herdr".to_string()),
-            Some("com.apple.Terminal".to_string())
-        ));
-        assert!(!should_skip_from_focus_and_bundles(
-            true,
-            None,
-            Some("com.example.Herdr".to_string())
-        ));
-        assert!(!should_skip_from_focus_and_bundles(
-            true,
-            Some("com.example.Herdr".to_string()),
-            None
-        ));
-        assert!(!should_skip_from_focus_and_bundles(
-            false,
-            Some("com.example.Herdr".to_string()),
-            Some("com.example.Herdr".to_string())
-        ));
+    fn decides_when_to_skip_or_monitor_notifications() {
+        assert_eq!(
+            notification_decision_from_focus_and_bundles(
+                true,
+                Some("com.example.Herdr".to_string()),
+                Some("com.example.Herdr".to_string())
+            ),
+            NotificationDecision::Skip
+        );
+        assert_eq!(
+            notification_decision_from_focus_and_bundles(
+                true,
+                Some("com.example.Herdr".to_string()),
+                Some("com.apple.Terminal".to_string())
+            ),
+            NotificationDecision::SendWithVisibilityMonitor
+        );
+        assert_eq!(
+            notification_decision_from_focus_and_bundles(
+                true,
+                None,
+                Some("com.example.Herdr".to_string())
+            ),
+            NotificationDecision::Send
+        );
+        assert_eq!(
+            notification_decision_from_focus_and_bundles(
+                true,
+                Some("com.example.Herdr".to_string()),
+                None
+            ),
+            NotificationDecision::Send
+        );
+        assert_eq!(
+            notification_decision_from_focus_and_bundles(
+                false,
+                Some("com.example.Herdr".to_string()),
+                Some("com.example.Herdr".to_string())
+            ),
+            NotificationDecision::Send
+        );
     }
 
     #[test]

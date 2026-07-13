@@ -11,7 +11,7 @@ Notifications are sent only when you are **not already looking at that pane**:
 - Herdr is not the frontmost app.
 - Herdr is frontmost, but another pane is focused.
 
-When you later focus that pane directly in Herdr, its pending notification is removed. If the pane is already active when you switch back to the configured terminal app, the pending notification is also removed within a couple of seconds. The plugin only clears it after confirming that the configured terminal app is frontmost, so a background script or API call that changes Herdr's focus cannot hide a notification you have not seen.
+When you later focus that pane directly in Herdr, its pending notification is removed. If the pane was already active when the notification was sent, switching back to the configured terminal app also removes it within a couple of seconds. The plugin only clears it after confirming that the configured terminal app is frontmost, so a background script or API call that changes Herdr's focus cannot hide a notification you have not seen.
 
 ## Requirements
 

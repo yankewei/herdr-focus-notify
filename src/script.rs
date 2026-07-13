@@ -14,6 +14,7 @@ pub(crate) fn write_focus_script(
     notification: &FocusNotification,
     herdr_bin: &str,
     notifier_bin: &str,
+    monitor_visibility: bool,
 ) -> io::Result<PathBuf> {
     let state_dir = plugin_state_dir();
     fs::create_dir_all(&state_dir)?;
@@ -27,13 +28,16 @@ pub(crate) fn write_focus_script(
     notification.app_icon.hash(&mut hasher);
     herdr_bin.hash(&mut hasher);
     notifier_bin.hash(&mut hasher);
+    monitor_visibility.hash(&mut hasher);
     alerter_timeout_secs().hash(&mut hasher);
     activate_app().hash(&mut hasher);
     is_debug_enabled().hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
     let debug_log_path = is_debug_enabled().then(|| state_dir.join("focus-click.log"));
-    let executable_path = env::current_exe().ok();
+    let executable_path = monitor_visibility
+        .then(|| env::current_exe().ok())
+        .flatten();
     let script = focus_script_content(
         notification,
         herdr_bin,

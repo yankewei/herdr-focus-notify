@@ -175,6 +175,82 @@ fn visible_focused_pane_removes_its_pending_notification() {
 }
 
 #[cfg(unix)]
+#[test]
+fn unfocused_pane_does_not_start_a_visibility_monitor() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "herdr-focus-notify-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let frontmost_state = temp_dir.join("frontmost-bundle-id");
+    fs::write(&frontmost_state, "com.example.other\n").unwrap();
+    let focused_pane_state = temp_dir.join("focused-pane-id");
+    fs::write(&focused_pane_state, "w1:p1\n").unwrap();
+
+    let osascript = temp_dir.join("osascript");
+    write_executable(
+        &osascript,
+        "#!/bin/sh\ncase \"$*\" in\n  *frontmost*) cat \"$FRONTMOST_STATE\" ;;\n  *) printf '%s\\n' 'com.example.terminal' ;;\nesac\n",
+    );
+
+    let herdr = temp_dir.join("herdr");
+    write_executable(
+        &herdr,
+        "#!/bin/sh\nprintf '{\"result\":{\"agents\":[{\"focused\":true,\"pane_id\":\"%s\"}]}}\\n' \"$(cat \"$FOCUSED_PANE_STATE\")\"\n",
+    );
+
+    let notifier = temp_dir.join("alerter");
+    write_executable(
+        &notifier,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$NOTIFIER_LOG\"\nif [ \"$1\" = \"--remove\" ]; then\n  exit 0\nfi\nsleep 3\n",
+    );
+
+    let notifier_log = temp_dir.join("notifier.log");
+    let path = format!(
+        "{}:{}",
+        temp_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = binary()
+        .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"done"}}"#,
+        )
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
+        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("FRONTMOST_STATE", &frontmost_state)
+        .env("FOCUSED_PANE_STATE", &focused_pane_state)
+        .env("NOTIFIER_LOG", &notifier_log)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    for _ in 0..500 {
+        if notifier_log.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(notifier_log.exists());
+    fs::write(&focused_pane_state, "w1:p2\n").unwrap();
+    fs::write(&frontmost_state, "com.example.terminal\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
+    assert!(!notifier_output.contains("--remove\nherdr-w1-p2\n"));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
 fn write_executable(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
     let mut permissions = fs::metadata(path).unwrap().permissions();
