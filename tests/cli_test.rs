@@ -105,6 +105,76 @@ fn focus_event_removes_notification_for_foreground_terminal() {
 }
 
 #[cfg(unix)]
+#[test]
+fn visible_focused_pane_removes_its_pending_notification() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "herdr-focus-notify-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let frontmost_state = temp_dir.join("frontmost-bundle-id");
+    fs::write(&frontmost_state, "com.example.other\n").unwrap();
+
+    let osascript = temp_dir.join("osascript");
+    write_executable(
+        &osascript,
+        "#!/bin/sh\ncase \"$*\" in\n  *frontmost*) cat \"$FRONTMOST_STATE\" ;;\n  *) printf '%s\\n' 'com.example.terminal' ;;\nesac\n",
+    );
+
+    let herdr = temp_dir.join("herdr");
+    write_executable(
+        &herdr,
+        "#!/bin/sh\nprintf '%s\\n' '{\"result\":{\"agents\":[{\"focused\":true,\"pane_id\":\"w1:p2\"}]}}'\n",
+    );
+
+    let notifier = temp_dir.join("alerter");
+    write_executable(
+        &notifier,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$NOTIFIER_LOG\"\nif [ \"$1\" = \"--remove\" ]; then\n  touch \"$REMOVE_SIGNAL\"\n  exit 0\nfi\nfor _ in 1 2 3 4 5; do\n  [ -e \"$REMOVE_SIGNAL\" ] && exit 0\n  sleep 1\ndone\n",
+    );
+
+    let notifier_log = temp_dir.join("notifier.log");
+    let remove_signal = temp_dir.join("removed");
+    let path = format!(
+        "{}:{}",
+        temp_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let child = binary()
+        .arg("--test")
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
+        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("FRONTMOST_STATE", &frontmost_state)
+        .env("NOTIFIER_LOG", &notifier_log)
+        .env("REMOVE_SIGNAL", &remove_signal)
+        .env("PATH", path)
+        .spawn()
+        .unwrap();
+
+    for _ in 0..500 {
+        if notifier_log.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    fs::write(&frontmost_state, "com.example.terminal\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
+    assert!(notifier_output.contains("--remove\nherdr-w1-p2\n"));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
 fn write_executable(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
     let mut permissions = fs::metadata(path).unwrap().permissions();

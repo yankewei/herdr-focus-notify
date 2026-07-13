@@ -11,7 +11,7 @@
 - 你当前在其它 App（Herdr 不在前台）
 - 你在 Herdr 里，但聚焦的是另一个 pane
 
-之后如果你直接在 Herdr 中聚焦该 pane，对应的待处理通知会被移除。插件只会在确认配置的终端 App 位于前台后才移除，因此后台脚本或 API 改变 Herdr 焦点时，不会隐藏你尚未看到的通知。
+之后如果你直接在 Herdr 中聚焦该 pane，对应的待处理通知会被移除。如果该 pane 原本就是 active，切回配置的终端 App 后，对应通知也会在数秒内移除。插件只会在确认配置的终端 App 位于前台后才移除，因此后台脚本或 API 改变 Herdr 焦点时，不会隐藏你尚未看到的通知。
 
 ## 前提条件
 
@@ -71,7 +71,7 @@ HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
 
 `ACTIVATE_APP` 填 app 名称（如 `kitty`）、`.app` 路径（如 `/Applications/kitty.app`）都可以，比 bundle id 更容易找到。
 
-建议配置 `ACTIVATE_APP`。它用于点击通知时把终端 App 提到前台、判断你是否正在看当前 Herdr pane，以及在你手动聚焦 pane 后移除对应通知。只有在插件能确认前台 App 是 `ACTIVATE_APP` 对应的 App 时，才会跳过或移除通知；如果 macOS 前台 App 查询失败或 App 名称无法解析，插件会保留或发送通知，避免漏掉需要关注的状态。
+建议配置 `ACTIVATE_APP`。它用于点击通知时把终端 App 提到前台、判断你是否正在看当前 Herdr pane，以及在你手动聚焦 pane 或切回已 active 的 pane 后移除对应通知。只有在插件能确认前台 App 是 `ACTIVATE_APP` 对应的 App 时，才会跳过或移除通知；如果 macOS 前台 App 查询失败或 App 名称无法解析，插件会保留或发送通知，避免漏掉需要关注的状态。
 
 ### 常用配置
 

@@ -11,7 +11,7 @@ Notifications are sent only when you are **not already looking at that pane**:
 - Herdr is not the frontmost app.
 - Herdr is frontmost, but another pane is focused.
 
-When you later focus that pane directly in Herdr, its pending notification is removed. The plugin only clears it after confirming that your configured terminal app is frontmost, so a background script or API call that changes Herdr's focus cannot hide a notification you have not seen.
+When you later focus that pane directly in Herdr, its pending notification is removed. If the pane is already active when you switch back to the configured terminal app, the pending notification is also removed within a couple of seconds. The plugin only clears it after confirming that the configured terminal app is frontmost, so a background script or API call that changes Herdr's focus cannot hide a notification you have not seen.
 
 ## Requirements
 
@@ -71,7 +71,7 @@ HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
 
 `ACTIVATE_APP` can be an app name, such as `kitty`, or a `.app` path, such as `/Applications/kitty.app`. This is easier to configure than a bundle id.
 
-Configuring `ACTIVATE_APP` is recommended. It is used to bring your terminal app to the front when you click a notification, to decide whether you are already looking at the current Herdr pane, and to clear a notification once you manually focus its pane. The plugin skips or clears a notification only when it can confirm that the frontmost app is the app resolved from `ACTIVATE_APP`. If macOS frontmost-app detection fails, or the app name cannot be resolved, the plugin keeps or sends the notification to avoid missing an important state change.
+Configuring `ACTIVATE_APP` is recommended. It is used to bring your terminal app to the front when you click a notification, to decide whether you are already looking at the current Herdr pane, and to clear a notification once you manually focus its pane or return to an already-active pane. The plugin skips or clears a notification only when it can confirm that the frontmost app is the app resolved from `ACTIVATE_APP`. If macOS frontmost-app detection fails, or the app name cannot be resolved, the plugin keeps or sends the notification to avoid missing an important state change.
 
 ### Common Options
 

@@ -44,6 +44,12 @@ fn run() -> Result<(), String> {
             println!("herdr-focus-notify {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
+        CliAction::CheckPaneVisibility(pane_id) => {
+            let herdr_bin = resolve_herdr_bin();
+            return should_skip_notification(&pane_id, &herdr_bin)
+                .then_some(())
+                .ok_or_else(|| "pane is not visible in the configured app".to_string());
+        }
         CliAction::Event | CliAction::Test => {}
     }
 
@@ -82,7 +88,9 @@ fn run() -> Result<(), String> {
                 None => return Ok(()),
             }
         }
-        CliAction::Help | CliAction::Version => unreachable!("handled before notification setup"),
+        CliAction::Help | CliAction::Version | CliAction::CheckPaneVisibility(_) => {
+            unreachable!("handled before notification setup")
+        }
     };
 
     if !status_is_enabled(&notification.status) {

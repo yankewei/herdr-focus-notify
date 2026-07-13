@@ -1,4 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
+use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -32,10 +33,12 @@ pub(crate) fn write_focus_script(
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
     let debug_log_path = is_debug_enabled().then(|| state_dir.join("focus-click.log"));
+    let executable_path = env::current_exe().ok();
     let script = focus_script_content(
         notification,
         herdr_bin,
         notifier_bin,
+        executable_path.as_deref(),
         debug_log_path.as_deref(),
     );
 
@@ -49,6 +52,7 @@ fn focus_script_content(
     notification: &FocusNotification,
     herdr_bin: &str,
     notifier_bin: &str,
+    executable_path: Option<&Path>,
     debug_log_path: Option<&Path>,
 ) -> String {
     alerter_focus_script(
@@ -57,6 +61,10 @@ fn focus_script_content(
         notifier_bin,
         alerter_timeout_secs(),
         activation_command().as_deref(),
+        activate_app()
+            .is_some()
+            .then_some(executable_path)
+            .flatten(),
         debug_log_path,
     )
 }
@@ -67,6 +75,7 @@ fn alerter_focus_script(
     notifier_bin: &str,
     timeout_secs: u64,
     activate_command: Option<&str>,
+    visibility_check_binary: Option<&Path>,
     debug_log_path: Option<&Path>,
 ) -> String {
     let title_q = shell_quote(&notification.title);
@@ -87,6 +96,15 @@ fn alerter_focus_script(
     } else {
         String::new()
     };
+    let visibility_check_command = visibility_check_binary.map(|binary| {
+        format!(
+            "{} --check-pane-visibility {}",
+            shell_quote(binary.to_string_lossy().as_ref()),
+            pane_q
+        )
+    });
+    let result_template_q = shell_quote(&format!("{}.result.XXXXXX", cleared_marker.display()));
+    let status_template_q = shell_quote(&format!("{}.status.XXXXXX", cleared_marker.display()));
 
     let mut script = String::from("#!/bin/sh\n");
     script.push_str(&format!(
@@ -94,7 +112,9 @@ fn alerter_focus_script(
         cleared_marker = cleared_marker_q
     ));
     script.push_str(&format!(
-        "result=$({notifier} --title {title} --message {body} --group {group}{app_icon_args} --actions {action} --close-label {close_label}{timeout_args} 2>/dev/null)\n",
+        "result_path=$(mktemp {result_template}) || exit 1\nstatus_path=$(mktemp {status_template}) || {{ rm -f \"$result_path\"; exit 1; }}\nmonitor_pid=\ncleanup() {{\n  [ -z \"$monitor_pid\" ] || kill \"$monitor_pid\" 2>/dev/null\n  rm -f \"$result_path\" \"$status_path\"\n}}\ntrap cleanup EXIT\n(\n  {notifier} --title {title} --message {body} --group {group}{app_icon_args} --actions {action} --close-label {close_label}{timeout_args} > \"$result_path\" 2>/dev/null\n  printf '%s' \"$?\" > \"$status_path\"\n) &\nnotifier_pid=$!\n",
+        result_template = result_template_q,
+        status_template = status_template_q,
         notifier = notifier_q,
         title = title_q,
         body = body_q,
@@ -104,7 +124,21 @@ fn alerter_focus_script(
         close_label = shell_quote("Dismiss"),
         timeout_args = timeout_args,
     ));
-    script.push_str("notifier_status=$?\n");
+    if let Some(ref visibility_check_command) = visibility_check_command {
+        script.push_str(&format!(
+            "(\n  while kill -0 \"$notifier_pid\" 2>/dev/null; do\n    sleep 2\n    kill -0 \"$notifier_pid\" 2>/dev/null || exit 0\n    if {visibility_check} >/dev/null 2>&1 && {notifier} --remove {group} >/dev/null 2>&1; then\n      exit 0\n    fi\n  done\n) &\nmonitor_pid=$!\n",
+            visibility_check = visibility_check_command,
+            notifier = notifier_q,
+            group = group_q,
+        ));
+    }
+    script.push_str("wait \"$notifier_pid\"\n");
+    if visibility_check_command.is_some() {
+        script.push_str(
+            "kill \"$monitor_pid\" 2>/dev/null\nwait \"$monitor_pid\" 2>/dev/null\nmonitor_pid=\n",
+        );
+    }
+    script.push_str("notifier_status=$(cat \"$status_path\" 2>/dev/null || printf '1')\nresult=$(cat \"$result_path\")\nrm -f \"$result_path\" \"$status_path\"\n");
 
     match debug_log_path {
         Some(log_path) => {
@@ -216,6 +250,7 @@ mod tests {
             &notification,
             "/tmp/herdr bin",
             "/opt/homebrew/bin/alerter",
+            None,
             Some(Path::new("/tmp/focus clicks.log")),
         );
 
@@ -233,6 +268,7 @@ mod tests {
             "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             None,
+            None,
         );
 
         assert!(script.starts_with("#!/bin/sh\n"));
@@ -247,7 +283,7 @@ mod tests {
             script.find(".cleared' ] && exit 0").unwrap()
                 < script.find("'/opt/homebrew/bin/alerter' --title").unwrap()
         );
-        assert!(script.contains("notifier_status=$?"));
+        assert!(script.contains("notifier_status=$(cat \"$status_path\""));
         assert!(script.contains("exit \"$notifier_status\""));
         assert!(script.contains("Focus|@ACTIONCLICKED|@CONTENTCLICKED)"));
         assert!(script.contains("exec '/usr/local/bin/herdr' agent focus 'w1:p3'"));
@@ -260,6 +296,7 @@ mod tests {
             "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
             120,
+            None,
             None,
             None,
         );
@@ -276,6 +313,7 @@ mod tests {
             0,
             None,
             None,
+            None,
         );
 
         assert!(!script.contains("--timeout"));
@@ -289,12 +327,13 @@ mod tests {
             "/opt/homebrew/bin/alerter",
             1800,
             None,
+            None,
             Some(Path::new("/tmp/click.log")),
         );
 
         assert!(script.contains("alerter status=%s result=%s"));
         assert!(script.contains(">> '/tmp/click.log' 2>&1"));
-        assert!(script.contains("notifier_status=$?"));
+        assert!(script.contains("notifier_status=$(cat \"$status_path\""));
         assert!(script.contains("status=0\n"));
         assert!(script.contains("focus exited %s"));
         assert!(script.contains("Focus|@ACTIONCLICKED|@CONTENTCLICKED)"));
@@ -310,10 +349,35 @@ mod tests {
             3600,
             Some("open -a 'kitty'"),
             None,
+            None,
         );
 
         assert!(script.contains("open -a 'kitty' >/dev/null 2>&1"));
         assert!(script.contains("exec '/usr/local/bin/herdr' agent focus 'w1:p3'"));
+    }
+
+    #[test]
+    fn alerter_script_monitors_visibility_after_starting_the_notifier() {
+        let script = alerter_focus_script(
+            &sample_notification(),
+            "/usr/local/bin/herdr",
+            "/opt/homebrew/bin/alerter",
+            3600,
+            Some("open -a 'kitty'"),
+            Some(Path::new("/tmp/herdr-focus-notify")),
+            None,
+        );
+
+        assert!(script.contains("notifier_pid=$!"));
+        assert!(script.contains("while kill -0 \"$notifier_pid\" 2>/dev/null"));
+        assert!(script.contains("kill -0 \"$notifier_pid\" 2>/dev/null || exit 0"));
+        assert!(script.contains("'/tmp/herdr-focus-notify' --check-pane-visibility 'w1:p3'"));
+        assert!(script.contains("'/opt/homebrew/bin/alerter' --remove 'herdr-w1-p3'"));
+        assert!(
+            script.find("notifier_pid=$!").unwrap()
+                < script.find("while kill -0 \"$notifier_pid\"").unwrap()
+        );
+        assert!(script.contains("kill \"$monitor_pid\" 2>/dev/null"));
     }
 
     #[test]
