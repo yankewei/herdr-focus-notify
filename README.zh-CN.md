@@ -2,21 +2,16 @@
 
 [English](README.md) | 简体中文
 
-当 Herdr agent 需要关注（`blocked`）或完成（`done`）时，发送可点击的 macOS 通知。点击通知会聚焦到对应的 Herdr pane。
+`herdr-focus-notify` 是一个 macOS Herdr 插件。当 agent 进入 `blocked` 或 `done` 状态时，它会发送可点击的桌面通知。点击后会聚焦到对应的 Herdr pane。
 
-常见 agent 会自动使用插件内置的本地图标，包括 Codex、Claude Code、Claude、Cursor、Gemini CLI、Gemini、GitHub Copilot、DeepSeek、Grok、Qwen、OpenCode、OpenHands、Roo Code、Cline、Windsurf、Devin、Manus、Kiro、Trae、Zencoder、Lovable、v0。
+它只在状态变化容易被错过时提醒你：Herdr 不在前台，或你正在查看另一个 pane。
 
-通知只会在你**没有在看这个 pane** 时发送：
+## 快速开始
 
-- 你当前在其它 App（Herdr 不在前台）
-- 你在 Herdr 里，但聚焦的是另一个 pane
-
-之后如果你直接在 Herdr 中聚焦该 pane，对应的待处理通知会被移除。如果通知发出时该 pane 已经是 active，切回配置的终端 App 后，对应通知也会在数秒内移除。插件只会在确认配置的终端 App 位于前台后才移除，因此后台脚本或 API 改变 Herdr 焦点时，不会隐藏你尚未看到的通知。
-
-## 前提条件
+### 1. 安装前提条件
 
 - macOS
-- Herdr `0.7.3` 或更新版本
+- Herdr `0.7.3` 或更高版本
 - [alerter](https://github.com/vjeantet/alerter)：用于显示可点击通知
 
 安装 alerter：
@@ -25,32 +20,22 @@
 brew install vjeantet/tap/alerter
 ```
 
-## 安装
+### 2. 安装插件
 
-本地构建并链接：
+从 GitHub 安装：
+
+```bash
+herdr plugin install yankewei/herdr-focus-notify
+```
+
+或者在本地构建并链接：
 
 ```bash
 cargo build --release
 herdr plugin link .
 ```
 
-或从 GitHub 安装：
-
-```bash
-herdr plugin install yankewei/herdr-focus-notify
-```
-
-## CLI
-
-```bash
-herdr-focus-notify --help
-herdr-focus-notify --version
-herdr-focus-notify --test
-```
-
-`--help` 和 `--version` 会输出到 stdout。`--test` 会发送一条前台测试通知。配置错误或通知后端错误会输出到 stderr，并返回非零退出码。普通插件调用如果没有 `HERDR_PLUGIN_EVENT_JSON`，仍会安静地以 `0` 退出。
-
-## 配置
+### 3. 配置终端 App
 
 找到插件配置目录：
 
@@ -58,31 +43,55 @@ herdr-focus-notify --test
 herdr plugin config-dir herdr-focus-notify
 ```
 
-在该目录下创建 `.env` 文件。
-
-`.env` 解析支持 `KEY=value`、可选的 `export KEY=value`、单引号值、双引号值，以及未加引号值后面的行尾注释。
-
-### 推荐配置
+在该目录创建 `.env` 文件。建议先只添加这一项：
 
 ```env
-HERDR_FOCUS_NOTIFY_NOTIFIER=/opt/homebrew/bin/alerter
 HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
 ```
 
-`ACTIVATE_APP` 填 app 名称（如 `kitty`）、`.app` 路径（如 `/Applications/kitty.app`）都可以，比 bundle id 更容易找到。
+可以填写终端 App 名称，例如 `kitty`；也可以填写绝对 `.app` 路径，例如 `/Applications/kitty.app`。
 
-建议配置 `ACTIVATE_APP`。它用于点击通知时把终端 App 提到前台、判断你是否正在看当前 Herdr pane，以及在你手动聚焦 pane 或切回已 active 的 pane 后移除对应通知。只有在插件能确认前台 App 是 `ACTIVATE_APP` 对应的 App 时，才会跳过或移除通知；如果 macOS 前台 App 查询失败或 App 名称无法解析，插件会保留或发送通知，避免漏掉需要关注的状态。
+这项配置让插件能在点击通知时激活终端，并可靠判断你是否已经看过对应 pane。通知程序通常会自动找到；只有自动查找失败时，才需要配置 `HERDR_FOCUS_NOTIFY_NOTIFIER`。
 
-### 常用配置
+## 通知规则
 
-| 变量 | 说明 | 默认值 |
-|---|---|---|
-| `HERDR_FOCUS_NOTIFY_NOTIFIER` | 通知后端路径；找不到可执行通知后端时会报错 | 自动查找 `alerter` |
-| `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` | 点击通知时激活的终端 app 名或 `.app` 路径 | 无 |
-| `HERDR_FOCUS_NOTIFY_TIMEOUT` | 通知自动消失时间（秒），`0` 表示不自动消失 | `3600` |
+默认情况下，`blocked` 和 `done` 状态变化会触发通知。正确配置 `ACTIVATE_APP` 后，只有在插件无法确认你正在查看对应 pane 时，才会真正发出通知。
 
-如果没有配置 `ACTIVATE_APP`，通知点击后仍会执行 `herdr agent focus <pane>`，但插件无法可靠判断前台 App 是否就是 Herdr 所在终端，因此可能会多发通知。
+| 当前状态 | 是否通知 |
+|---|---|
+| 其它 App 在前台 | 发送 |
+| Herdr 在前台，但焦点位于另一个 pane | 发送 |
+| Herdr 在前台，且焦点就是对应 pane | 跳过 |
+| 无法确定前台 App | 发送，避免遗漏状态变化 |
 
-排障时可以临时配置 `HERDR_FOCUS_NOTIFY_DEBUG=1`；需要暂停插件时可以配置 `HERDR_FOCUS_NOTIFY_ENABLED=0`。
+点击通知后，插件会激活配置的终端 App，然后执行 `herdr agent focus <pane>`。未配置 `ACTIVATE_APP` 时，聚焦仍能工作，但插件无法可靠判断你是否已查看 pane，因此可能会多发通知。
 
-内置 agent 图标来自 `@lobehub/icons-static-png`，许可证为 MIT。见 `assets/icons/NOTICE.md`。
+配置的终端 App 在前台时，你在 Herdr 中手动聚焦对应 pane 后，待处理通知会被移除。如果通知到达时 pane 已经是 active，切回该终端 App 后，通知会在数秒内移除。
+
+## 可选设置
+
+插件一共支持六项设置，但通常只需要配置 `HERDR_FOCUS_NOTIFY_ACTIVATE_APP`，其它项都有可用的默认值。
+
+- `HERDR_FOCUS_NOTIFY_STATUSES`：触发通知的状态，以逗号分隔；默认 `blocked,done`。
+- `HERDR_FOCUS_NOTIFY_TIMEOUT`：自动关闭秒数；默认 `3600`，设为 `0` 则保持显示。
+- `HERDR_FOCUS_NOTIFY_ENABLED=0`：暂停通知，但不移除插件。
+- `HERDR_FOCUS_NOTIFY_NOTIFIER`：自动查找失败时，填写 `alerter` 的完整路径。
+- `HERDR_FOCUS_NOTIFY_DEBUG=1`：在插件日志和 `focus-click.log` 中输出诊断信息。
+
+`.env` 支持 `KEY=value`、可选的 `export KEY=value`、带引号的值和行尾注释。`ACTIVATE_APP` 中的路径会直接传给 `open`，请使用绝对路径，不要使用 `~`。
+
+## 排查问题
+
+| 问题 | 检查方式 |
+|---|---|
+| 没有收到通知 | 确认已安装且可执行 `alerter`。必要时把其完整路径写入 `HERDR_FOCUS_NOTIFY_NOTIFIER`。 |
+| 点击后没有激活预期终端 | 将 `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` 设为 App 名称或绝对 `.app` 路径。 |
+| 正在看 Herdr 时仍收到通知 | 配置 `ACTIVATE_APP`；未配置时，插件会优先保证不错过状态变化。 |
+| 需要诊断信息 | 临时设置 `HERDR_FOCUS_NOTIFY_DEBUG=1`，然后检查插件日志和 `focus-click.log`。 |
+| 想暂停通知 | 设置 `HERDR_FOCUS_NOTIFY_ENABLED=0`。 |
+
+## 内置图标
+
+已识别的 agent 名称会使用内置本地图标，包括 Codex、Claude Code、Cursor、Gemini、GitHub Copilot、DeepSeek、Qwen、OpenCode、OpenHands、Cline、Windsurf、Devin 和 v0。
+
+图标来自 `@lobehub/icons-static-png`，以 MIT 许可证提供。详见 `assets/icons/NOTICE.md`。
