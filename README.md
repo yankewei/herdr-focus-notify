@@ -78,7 +78,7 @@ If the pane was already active when the notification arrived, returning to that 
 
 There are six supported settings, but you normally need only `HERDR_FOCUS_NOTIFY_ACTIVATE_APP`. Everything else has a working default.
 
-- `HERDR_FOCUS_NOTIFY_STATUSES`: comma-separated notification statuses; default `blocked,done`.
+- `HERDR_FOCUS_NOTIFY_STATUSES`: comma-separated subset of the notifiable statuses (`blocked`, `done`); default `blocked,done`. Other statuses (e.g. `running`) never notify, because they need no user action.
 - `HERDR_FOCUS_NOTIFY_TIMEOUT`: auto-dismiss time in seconds; default `3600`, or `0` to keep notifications open.
 - `HERDR_FOCUS_NOTIFY_ENABLED=0`: pause notifications without removing the plugin.
 - `HERDR_FOCUS_NOTIFY_NOTIFIER`: full `alerter` path when auto-detection fails.

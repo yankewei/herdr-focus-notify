@@ -44,7 +44,7 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
    - In test mode (`--test` CLI arg), it fabricates a notification for the currently focused pane.
    - `--help` and `--version` print to stdout before plugin setup.
 3. **Notification decision**:
-   - Only `blocked` and `done` statuses produce notifications unless overridden by `HERDR_FOCUS_NOTIFY_STATUSES`.
+   - Only `blocked` and `done` statuses can produce notifications (they are the ones that need user action); `HERDR_FOCUS_NOTIFY_STATUSES` can only narrow that set, never extend it.
    - The notification is skipped if the target pane is already focused **and** the frontmost macOS application belongs to the same bundle ID as the configured `ACTIVATE_APP` (see `should_skip_from_focus_and_bundles`). If either check fails, the plugin sends the notification to avoid missing a state change.
    - Recognized agent names are matched to bundled local PNG icons and passed to `alerter` with `--app-icon`.
 4. **Binary resolution**:
@@ -67,7 +67,7 @@ Key variables observed in code:
 | Variable | Effect |
 |---|---|
 | `HERDR_FOCUS_NOTIFY_ENABLED` | `0`/`false`/`no`/`off` disables the plugin. |
-| `HERDR_FOCUS_NOTIFY_STATUSES` | Comma-separated statuses that trigger notifications. Default: `blocked,done`. |
+| `HERDR_FOCUS_NOTIFY_STATUSES` | Comma-separated subset of `blocked,done` that triggers notifications. Default: `blocked,done`. |
 | `HERDR_FOCUS_NOTIFY_NOTIFIER` | Path to the notifier backend. Defaults to auto-detected `alerter`. |
 | `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` | Terminal app name (e.g. `kitty`) or `.app` path (e.g. `/Applications/kitty.app`) to activate on click and to resolve a bundle ID for skip detection. |
 | `HERDR_FOCUS_NOTIFY_TIMEOUT` | Alerter auto-dismiss timeout in seconds; `0` disables auto-dismiss. Default: `3600`. |

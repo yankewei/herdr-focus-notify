@@ -35,6 +35,9 @@ pub(crate) fn notification_from_event_json(
         .trim()
         .to_ascii_lowercase();
 
+    // Only blocked and done need user action, so they are the only statuses
+    // that can ever notify; HERDR_FOCUS_NOTIFY_STATUSES can only narrow this
+    // set afterwards (see config::status_is_enabled).
     if status != "blocked" && status != "done" {
         return Ok(None);
     }

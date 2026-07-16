@@ -72,7 +72,7 @@ HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
 
 插件一共支持六项设置，但通常只需要配置 `HERDR_FOCUS_NOTIFY_ACTIVATE_APP`，其它项都有可用的默认值。
 
-- `HERDR_FOCUS_NOTIFY_STATUSES`：触发通知的状态，以逗号分隔；默认 `blocked,done`。
+- `HERDR_FOCUS_NOTIFY_STATUSES`：在可通知状态（`blocked`、`done`）中选取子集，以逗号分隔；默认 `blocked,done`。其他状态（如 `running`）不需要用户操作，永远不会触发通知。
 - `HERDR_FOCUS_NOTIFY_TIMEOUT`：自动关闭秒数；默认 `3600`，设为 `0` 则保持显示。
 - `HERDR_FOCUS_NOTIFY_ENABLED=0`：暂停通知，但不移除插件。
 - `HERDR_FOCUS_NOTIFY_NOTIFIER`：自动查找失败时，填写 `alerter` 的完整路径。
