@@ -96,13 +96,19 @@ fn run() -> Result<(), String> {
         }
     };
 
-    if !status_is_enabled(&notification.status) {
+    if action != CliAction::Test && !status_is_enabled(&notification.status) {
         return Ok(());
     }
 
-    let notification_decision = notification_decision(&notification.pane_id, &herdr_bin);
+    let mut notification_decision = notification_decision(&notification.pane_id, &herdr_bin);
     if notification_decision == NotificationDecision::Skip {
-        return Ok(());
+        if action == CliAction::Test {
+            // --test validates the pipeline end to end, so it never suppresses
+            // the notification; it just goes without the visibility monitor.
+            notification_decision = NotificationDecision::Send;
+        } else {
+            return Ok(());
+        }
     }
 
     reset_notification_clearance(&notification.pane_id)

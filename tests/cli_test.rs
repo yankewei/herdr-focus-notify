@@ -176,6 +176,66 @@ fn visible_focused_pane_removes_its_pending_notification() {
 
 #[cfg(unix)]
 #[test]
+fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "herdr-focus-notify-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // Both bundle-ID queries answer with the configured app, so the pane
+    // counts as visible and a normal event would be skipped.
+    let osascript = temp_dir.join("osascript");
+    write_executable(
+        &osascript,
+        "#!/bin/sh\nprintf '%s\\n' 'com.example.terminal'\n",
+    );
+
+    let herdr = temp_dir.join("herdr");
+    write_executable(
+        &herdr,
+        "#!/bin/sh\nprintf '%s\\n' '{\"result\":{\"agents\":[{\"focused\":true,\"pane_id\":\"w1:p2\"}]}}'\n",
+    );
+
+    let notifier = temp_dir.join("alerter");
+    write_executable(
+        &notifier,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NOTIFIER_LOG\"\n",
+    );
+
+    let notifier_log = temp_dir.join("notifier.log");
+    let path = format!(
+        "{}:{}",
+        temp_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = binary()
+        .arg("--test")
+        // A filter that excludes the hardcoded test status must not suppress
+        // a test notification either.
+        .env("HERDR_FOCUS_NOTIFY_STATUSES", "done")
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
+        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("NOTIFIER_LOG", &notifier_log)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(fs::read_to_string(&notifier_log)
+        .unwrap_or_default()
+        .contains("--title"));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn unfocused_pane_does_not_start_a_visibility_monitor() {
     let temp_dir = std::env::temp_dir().join(format!(
         "herdr-focus-notify-test-{}-{}",
