@@ -41,7 +41,7 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
 1. **Entry point**: `main()` calls `run()`, prints real errors to stderr, and returns a non-zero exit code.
 2. **Event source**:
    - In normal mode, the binary reads the Herdr event from the `HERDR_PLUGIN_EVENT_JSON` environment variable.
-   - In test mode (`--test` CLI arg), it fabricates a notification for the currently focused pane. Test mode always sends: it bypasses the status filter and downgrades a `Skip` focus decision to a plain send (no visibility monitor), so the action can validate the pipeline even in a fully configured setup.
+   - In test mode (`--test` CLI arg), it fabricates a notification for the currently focused pane. When the plugin is enabled, test mode always sends: it bypasses the status filter and downgrades a `Skip` focus decision to a plain send (no visibility monitor), so the action can validate the pipeline even in a fully configured setup.
    - `--help` and `--version` print to stdout before plugin setup.
 3. **Notification decision**:
    - Only `blocked` and `done` statuses can produce notifications (they are the ones that need user action); `HERDR_FOCUS_NOTIFY_STATUSES` can only narrow that set, never extend it.
