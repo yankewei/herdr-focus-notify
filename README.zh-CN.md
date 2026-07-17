@@ -92,6 +92,6 @@ HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
 
 ## 内置图标
 
-已识别的 agent 名称会使用内置本地图标，包括 Codex、Claude Code、Cursor、Gemini、GitHub Copilot、DeepSeek、Qwen、OpenCode、OpenHands、Cline、Windsurf、Devin 和 v0。
+已识别的 agent 名称会使用内置本地图标，包括 Codex、Claude Code、Cursor、Gemini、GitHub Copilot、DeepSeek、Qwen、Kimi、OpenCode、OpenHands、Cline、Windsurf、Devin 和 v0。
 
 图标来自 `@lobehub/icons-static-png`，以 MIT 许可证提供。详见 `assets/icons/NOTICE.md`。

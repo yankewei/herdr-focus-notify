@@ -90,6 +90,12 @@ const AGENT_ICONS: &[AgentIcon] = &[
         bytes: include_bytes!("../assets/icons/agents/qwen-color.png"),
     },
     AgentIcon {
+        exact: &["kimi", "moonshot", "moonshotai"],
+        substring: Some("kimi"),
+        file: "kimi-color.png",
+        bytes: include_bytes!("../assets/icons/agents/kimi-color.png"),
+    },
+    AgentIcon {
         exact: &["openai", "chatgpt"],
         substring: Some("openai"),
         file: "openai.png",
@@ -239,6 +245,9 @@ mod tests {
             ("Gemini CLI", "geminicli-color.png"),
             ("DeepSeek", "deepseek-color.png"),
             ("Qwen", "qwen-color.png"),
+            ("Kimi", "kimi-color.png"),
+            ("Kimi Code", "kimi-color.png"),
+            ("Moonshot AI", "kimi-color.png"),
             ("v0", "v0.png"),
         ];
 
