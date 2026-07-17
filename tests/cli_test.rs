@@ -50,6 +50,20 @@ fn test_mode_reports_bad_notifier() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("configured notifier"));
 }
 
+#[test]
+fn disabled_test_mode_is_quiet_even_when_notifier_config_is_bad() {
+    let output = binary()
+        .arg("--test")
+        .env("HERDR_FOCUS_NOTIFY_ENABLED", "0")
+        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", "/definitely/missing")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn focus_event_removes_notification_for_foreground_terminal() {
