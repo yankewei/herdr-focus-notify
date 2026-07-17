@@ -1,6 +1,6 @@
 [package]
 name = "herdr-focus-notify"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2021"
 license = "MIT"
 description = "Clickable macOS desktop notifications that focus the relevant Herdr agent pane."
