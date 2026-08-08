@@ -3,10 +3,18 @@ use std::path::{Path, PathBuf};
 
 use crate::config::config_var;
 
-pub(crate) fn resolve_herdr_bin() -> String {
-    config_var("HERDR_BIN_PATH")
-        .or_else(|| find_executable("herdr", herdr_candidate_paths()))
-        .unwrap_or_else(|| "herdr".to_string())
+pub(crate) fn resolve_herdr_bin() -> Result<String, String> {
+    if let Some(configured) = config_var("HERDR_BIN_PATH") {
+        if is_executable_file(Path::new(&configured)) || executable_in_path(&configured).is_some() {
+            return Ok(configured);
+        }
+
+        return Err(format!(
+            "configured Herdr binary is not executable: {configured}"
+        ));
+    }
+
+    Ok(find_executable("herdr", herdr_candidate_paths()).unwrap_or_else(|| "herdr".to_string()))
 }
 
 pub(crate) fn find_executable(name: &str, candidate_paths: Vec<PathBuf>) -> Option<String> {

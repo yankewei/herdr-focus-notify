@@ -6,13 +6,23 @@ use crate::notification::FocusNotification;
 use crate::util::sanitize_group_id;
 
 #[derive(Debug, Deserialize)]
-struct AgentListEnvelope {
-    result: Option<AgentListResult>,
+struct PaneListEnvelope {
+    result: Option<PaneListResult>,
 }
 
 #[derive(Debug, Deserialize)]
-struct AgentListResult {
-    agents: Vec<AgentInfo>,
+struct PaneListResult {
+    panes: Vec<AgentInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentGetEnvelope {
+    result: Option<AgentGetResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentGetResult {
+    agent: Option<AgentInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,8 +63,24 @@ pub(crate) fn should_clear_notification_on_focus() -> bool {
 }
 
 fn pane_is_focused(pane_id: &str, herdr_bin: &str) -> bool {
-    focused_pane_id(herdr_bin)
-        .map(|focused| focused == pane_id)
+    let output = Command::new(herdr_bin)
+        .args(["agent", "get", pane_id])
+        .output();
+
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let Ok(json) = String::from_utf8(output.stdout) else {
+        return false;
+    };
+
+    agent_is_focused_from_get_json(&json, pane_id)
+        .ok()
+        .flatten()
         .unwrap_or(false)
 }
 
@@ -85,7 +111,7 @@ fn frontmost_bundle_id_via_applescript() -> Option<String> {
 
 fn bundle_id_from_app(app: Option<&str>) -> Option<String> {
     let app = app?;
-    let escaped = app.replace('"', "\\\"");
+    let escaped = applescript_string_content(app);
     let script = format!("id of app \"{escaped}\"");
 
     let output = Command::new("osascript")
@@ -104,9 +130,13 @@ fn bundle_id_from_app(app: Option<&str>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn applescript_string_content(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 fn focused_pane_id(herdr_bin: &str) -> Option<String> {
     let output = Command::new(herdr_bin)
-        .arg("agent")
+        .arg("pane")
         .arg("list")
         .output()
         .ok()?;
@@ -116,15 +146,15 @@ fn focused_pane_id(herdr_bin: &str) -> Option<String> {
     }
 
     let json = String::from_utf8(output.stdout).ok()?;
-    focused_pane_id_from_agent_list_json(&json).ok().flatten()
+    focused_pane_id_from_pane_list_json(&json).ok().flatten()
 }
 
-fn focused_pane_id_from_agent_list_json(json: &str) -> Result<Option<String>, String> {
-    let envelope: AgentListEnvelope =
-        serde_json::from_str(json).map_err(|err| format!("invalid agent list json: {err}"))?;
+fn focused_pane_id_from_pane_list_json(json: &str) -> Result<Option<String>, String> {
+    let envelope: PaneListEnvelope =
+        serde_json::from_str(json).map_err(|err| format!("invalid pane list json: {err}"))?;
 
     Ok(envelope.result.and_then(|result| {
-        result.agents.into_iter().find_map(|agent| {
+        result.panes.into_iter().find_map(|agent| {
             agent
                 .focused
                 .then_some(agent.pane_id)
@@ -132,6 +162,20 @@ fn focused_pane_id_from_agent_list_json(json: &str) -> Result<Option<String>, St
                 .map(|pane_id| pane_id.trim().to_string())
                 .filter(|pane_id| !pane_id.is_empty())
         })
+    }))
+}
+
+fn agent_is_focused_from_get_json(
+    json: &str,
+    expected_pane_id: &str,
+) -> Result<Option<bool>, String> {
+    let envelope: AgentGetEnvelope =
+        serde_json::from_str(json).map_err(|err| format!("invalid agent get json: {err}"))?;
+
+    Ok(envelope.result.and_then(|result| {
+        result
+            .agent
+            .map(|agent| agent.focused && agent.pane_id.as_deref() == Some(expected_pane_id))
     }))
 }
 
@@ -163,11 +207,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_focused_pane_from_agent_list_json() {
+    fn finds_focused_pane_from_pane_list_json() {
         let json = r#"{
-            "id": "cli:agent:list",
+            "id": "cli:pane:list",
             "result": {
-                "agents": [
+                "panes": [
                     {"agent": "codex", "focused": false, "pane_id": "w1:p1"},
                     {"agent": "kimi", "focused": true, "pane_id": "w1:p2"}
                 ]
@@ -175,8 +219,30 @@ mod tests {
         }"#;
 
         assert_eq!(
-            focused_pane_id_from_agent_list_json(json).unwrap(),
+            focused_pane_id_from_pane_list_json(json).unwrap(),
             Some("w1:p2".to_string())
+        );
+    }
+
+    #[test]
+    fn reads_focus_from_agent_get_json() {
+        let json = r#"{
+            "id": "cli:agent:get",
+            "result": {
+                "agent": {
+                    "focused": true,
+                    "pane_id": "w1:p2"
+                }
+            }
+        }"#;
+
+        assert_eq!(
+            agent_is_focused_from_get_json(json, "w1:p2").unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            agent_is_focused_from_get_json(json, "w1:p3").unwrap(),
+            Some(false)
         );
     }
 
@@ -238,5 +304,13 @@ mod tests {
             None,
             Some("com.example.Herdr".to_string())
         ));
+    }
+
+    #[test]
+    fn escapes_backslashes_and_quotes_for_applescript() {
+        assert_eq!(
+            applescript_string_content(r#"/Applications/Kitty\"Dev.app"#),
+            r#"/Applications/Kitty\\\"Dev.app"#
+        );
     }
 }

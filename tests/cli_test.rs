@@ -51,6 +51,19 @@ fn test_mode_reports_bad_notifier() {
 }
 
 #[test]
+fn test_mode_reports_bad_configured_herdr_binary() {
+    let output = binary()
+        .arg("--test")
+        .env("HERDR_BIN_PATH", "/definitely/missing-herdr")
+        .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("configured Herdr binary"));
+}
+
+#[test]
 fn disabled_test_mode_is_quiet_even_when_notifier_config_is_bad() {
     let output = binary()
         .arg("--test")
@@ -143,7 +156,7 @@ fn visible_focused_pane_removes_its_pending_notification() {
     let herdr = temp_dir.join("herdr");
     write_executable(
         &herdr,
-        "#!/bin/sh\nprintf '%s\\n' '{\"result\":{\"agents\":[{\"focused\":true,\"pane_id\":\"w1:p2\"}]}}'\n",
+        "#!/bin/sh\nif [ \"$1\" = \"agent\" ] && [ \"$2\" = \"get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":true,\"pane_id\":\"w1:p2\"}}}'\nelse\n  printf '%s\\n' '{\"result\":{\"panes\":[{\"focused\":true,\"pane_id\":\"w1:p2\"}]}}'\nfi\n",
     );
 
     let notifier = temp_dir.join("alerter");
@@ -212,7 +225,7 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
     let herdr = temp_dir.join("herdr");
     write_executable(
         &herdr,
-        "#!/bin/sh\nprintf '%s\\n' '{\"result\":{\"agents\":[{\"focused\":true,\"pane_id\":\"w1:p2\"}]}}'\n",
+        "#!/bin/sh\nif [ \"$1\" = \"agent\" ] && [ \"$2\" = \"get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":true,\"pane_id\":\"w1:p2\"}}}'\nelse\n  printf '%s\\n' '{\"result\":{\"panes\":[{\"focused\":true,\"pane_id\":\"w1:p2\"}]}}'\nfi\n",
     );
 
     let notifier = temp_dir.join("alerter");
@@ -250,6 +263,65 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
 
 #[cfg(unix)]
 #[test]
+fn normal_notification_uses_herdr_explain_summary() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "herdr-focus-notify-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let herdr = temp_dir.join("herdr");
+    write_executable(
+        &herdr,
+        "#!/bin/sh\nif [ \"$2\" = \"get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":false,\"pane_id\":\"w1:p2\"}}}'\nelif [ \"$2\" = \"explain\" ]; then\n  printf '%s\\n' '{\"state\":\"blocked\",\"matched_rule\":{\"id\":\"needs_permission\",\"evidence\":{\"contains\":[\"Do you want to allow\"],\"region_preview\":\"Do you want to allow this command?\"}}}'\nfi\n",
+    );
+
+    let notifier = temp_dir.join("alerter");
+    write_executable(
+        &notifier,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NOTIFIER_LOG\"\n",
+    );
+
+    let notifier_log = temp_dir.join("notifier.log");
+    let path = format!(
+        "{}:{}",
+        temp_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = binary()
+        .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"blocked","agent":"Codex"}}"#,
+        )
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("NOTIFIER_LOG", &notifier_log)
+        .env("PATH", path)
+        .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    for _ in 0..500 {
+        if notifier_log.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
+    assert!(notifier_output.contains("Needs permission: Do you want to allow this command?"));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn unfocused_pane_does_not_start_a_visibility_monitor() {
     let temp_dir = std::env::temp_dir().join(format!(
         "herdr-focus-notify-test-{}-{}",
@@ -275,7 +347,7 @@ fn unfocused_pane_does_not_start_a_visibility_monitor() {
     let herdr = temp_dir.join("herdr");
     write_executable(
         &herdr,
-        "#!/bin/sh\nprintf '{\"result\":{\"agents\":[{\"focused\":true,\"pane_id\":\"%s\"}]}}\\n' \"$(cat \"$FOCUSED_PANE_STATE\")\"\n",
+        "#!/bin/sh\nif [ \"$1\" = \"agent\" ] && [ \"$2\" = \"get\" ]; then\n  focused=false\n  [ \"$(cat \"$FOCUSED_PANE_STATE\")\" = \"w1:p2\" ] && focused=true\n  printf '{\"result\":{\"agent\":{\"focused\":%s,\"pane_id\":\"w1:p2\"}}}\\n' \"$focused\"\nelse\n  printf '{\"result\":{\"panes\":[{\"focused\":true,\"pane_id\":\"%s\"}]}}\\n' \"$(cat \"$FOCUSED_PANE_STATE\")\"\nfi\n",
     );
 
     let notifier = temp_dir.join("alerter");

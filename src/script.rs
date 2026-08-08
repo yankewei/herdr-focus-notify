@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{activate_app, alerter_timeout_secs, is_debug_enabled};
 use crate::notification::FocusNotification;
-use crate::state::{cleared_notification_marker_path, plugin_state_dir};
+use crate::state::{cleanup_stale_state_files, cleared_notification_marker_path, plugin_state_dir};
 use crate::util::shell_quote;
 
 pub(crate) fn write_focus_script(
@@ -15,33 +15,33 @@ pub(crate) fn write_focus_script(
     herdr_bin: &str,
     notifier_bin: &str,
     monitor_visibility: bool,
+    test_mode: bool,
 ) -> io::Result<PathBuf> {
     let state_dir = plugin_state_dir();
     fs::create_dir_all(&state_dir)?;
+    // State cleanup is maintenance work; a stale file must not prevent a new
+    // notification from being delivered.
+    let _ = cleanup_stale_state_files();
+
+    let timeout_secs = if test_mode {
+        test_timeout_secs(alerter_timeout_secs())
+    } else {
+        alerter_timeout_secs()
+    };
 
     let mut hasher = DefaultHasher::new();
     notification.pane_id.hash(&mut hasher);
-    notification.status.hash(&mut hasher);
-    notification.title.hash(&mut hasher);
-    notification.body.hash(&mut hasher);
-    notification.group.hash(&mut hasher);
-    notification.app_icon.hash(&mut hasher);
-    herdr_bin.hash(&mut hasher);
-    notifier_bin.hash(&mut hasher);
-    monitor_visibility.hash(&mut hasher);
-    alerter_timeout_secs().hash(&mut hasher);
-    activate_app().hash(&mut hasher);
-    is_debug_enabled().hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
     let debug_log_path = is_debug_enabled().then(|| state_dir.join("focus-click.log"));
     let executable_path = monitor_visibility
         .then(|| env::current_exe().ok())
         .flatten();
-    let script = focus_script_content(
+    let script = focus_script_content_with_timeout(
         notification,
         herdr_bin,
         notifier_bin,
+        timeout_secs,
         executable_path.as_deref(),
         debug_log_path.as_deref(),
     );
@@ -52,10 +52,11 @@ pub(crate) fn write_focus_script(
     Ok(script_path)
 }
 
-fn focus_script_content(
+fn focus_script_content_with_timeout(
     notification: &FocusNotification,
     herdr_bin: &str,
     notifier_bin: &str,
+    timeout_secs: u64,
     executable_path: Option<&Path>,
     debug_log_path: Option<&Path>,
 ) -> String {
@@ -63,7 +64,7 @@ fn focus_script_content(
         notification,
         herdr_bin,
         notifier_bin,
-        alerter_timeout_secs(),
+        timeout_secs,
         activation_command().as_deref(),
         activate_app()
             .is_some()
@@ -71,6 +72,14 @@ fn focus_script_content(
             .flatten(),
         debug_log_path,
     )
+}
+
+fn test_timeout_secs(configured: u64) -> u64 {
+    if configured == 0 {
+        10
+    } else {
+        configured.min(10)
+    }
 }
 
 fn alerter_focus_script(
@@ -250,10 +259,11 @@ mod tests {
             group: "g".to_string(),
             app_icon: None,
         };
-        let script = focus_script_content(
+        let script = focus_script_content_with_timeout(
             &notification,
             "/tmp/herdr bin",
             "/opt/homebrew/bin/alerter",
+            alerter_timeout_secs(),
             None,
             Some(Path::new("/tmp/focus clicks.log")),
         );
@@ -267,10 +277,11 @@ mod tests {
 
     #[test]
     fn alerter_script_invokes_alerter_and_runs_focus_on_click() {
-        let script = focus_script_content(
+        let script = focus_script_content_with_timeout(
             &sample_notification(),
             "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
+            alerter_timeout_secs(),
             None,
             None,
         );
@@ -321,6 +332,13 @@ mod tests {
         );
 
         assert!(!script.contains("--timeout"));
+    }
+
+    #[test]
+    fn test_mode_uses_a_short_timeout() {
+        assert_eq!(test_timeout_secs(3600), 10);
+        assert_eq!(test_timeout_secs(0), 10);
+        assert_eq!(test_timeout_secs(5), 5);
     }
 
     #[test]

@@ -47,12 +47,13 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
    - Only `blocked` and `done` statuses can produce notifications (they are the ones that need user action); `HERDR_FOCUS_NOTIFY_STATUSES` can only narrow that set, never extend it.
    - The notification is skipped if the target pane is already focused **and** the frontmost macOS application belongs to the same bundle ID as the configured `ACTIVATE_APP` (see `should_skip_from_focus_and_bundles`). If either check fails, the plugin sends the notification to avoid missing a state change.
    - Recognized agent names are matched to bundled local PNG icons and passed to `alerter` with `--app-icon`.
+   - For a delivered `blocked` or `done` notification, Herdr's `agent explain --json` output is converted into a short body using the matched rule and screen evidence; failures fall back to the event title.
 4. **Binary resolution**:
    - `herdr` is resolved from `HERDR_BIN_PATH`, then `PATH`, then hard-coded candidates (`~/.local/bin/herdr`, `/opt/homebrew/bin/herdr`, `/usr/local/bin/herdr`), defaulting to `"herdr"`.
    - The notifier backend is resolved from `HERDR_FOCUS_NOTIFY_NOTIFIER`, then `PATH`, then hard-coded candidates for `alerter`.
 5. **Focus script generation**:
    - A shell script is written to `HERDR_PLUGIN_STATE_DIR` (falling back to `$TMPDIR/herdr-focus-notify`).
-   - The script name is a hash of the notification fields plus config, so repeated identical events reuse the same script path.
+   - The script name is a hash of the pane ID, so repeated events for one pane reuse the same script path. Old generated scripts and crashed notifier temp files are cleaned up opportunistically.
    - The script is made executable with mode `0o700`.
 6. **Notification delivery**:
    - Normal plugin events spawn the script detached via `nohup sh ... &`. The script itself calls `alerter`, then runs `herdr agent focus <pane>` if the user clicks the notification.
@@ -91,7 +92,7 @@ Bundled agent icons are extracted from `@lobehub/icons-static-png` and attribute
 - Unit tests are inline under each module's `#[cfg(test)] mod tests`; process-level CLI behavior lives under `tests/`.
 - Run with `cargo test`.
 - Tests cover JSON parsing, notification body construction, shell quoting, focus script generation, and skip logic.
-- Some runtime behavior (AppleScript bundle-ID detection, actual alerter invocation, `herdr agent list`) cannot be exercised in CI and is only validated manually on macOS.
+- Some runtime behavior (AppleScript bundle-ID detection, actual alerter invocation, `herdr agent get`, and the test-mode `herdr pane list`) cannot be exercised in CI and is only validated manually on macOS.
 
 ## Important Gotchas
 

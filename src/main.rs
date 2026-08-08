@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod event;
 mod executable;
+mod explain;
 mod focus;
 mod icons;
 mod notification;
@@ -17,13 +18,14 @@ use cli::{parse_cli_args, print_usage, CliAction};
 use config::{is_enabled, status_is_enabled};
 use event::{focused_pane_id_from_event_json, notification_from_event_json};
 use executable::resolve_herdr_bin;
+use explain::notification_summary;
 use focus::{
     notification_decision, should_clear_notification_on_focus, test_notification,
     NotificationDecision,
 };
 use notifier::{remove_notification, resolve_notifier_bin, send_notification};
 use script::write_focus_script;
-use state::{mark_notification_cleared, reset_notification_clearance};
+use state::{cleanup_stale_state_files, mark_notification_cleared, reset_notification_clearance};
 
 fn main() -> ExitCode {
     match run() {
@@ -47,8 +49,13 @@ fn run() -> Result<(), String> {
             println!("herdr-focus-notify {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
+        CliAction::Cleanup => {
+            cleanup_stale_state_files()
+                .map_err(|err| format!("failed to clean stale state files: {err}"))?;
+            return Ok(());
+        }
         CliAction::CheckPaneVisibility(pane_id) => {
-            let herdr_bin = resolve_herdr_bin();
+            let herdr_bin = resolve_herdr_bin()?;
             return (notification_decision(&pane_id, &herdr_bin) == NotificationDecision::Skip)
                 .then_some(())
                 .ok_or_else(|| "pane is not visible in the configured app".to_string());
@@ -60,9 +67,9 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let herdr_bin = resolve_herdr_bin();
+    let herdr_bin = resolve_herdr_bin()?;
 
-    let notification = match action {
+    let mut notification = match action {
         CliAction::Test => test_notification(&herdr_bin),
         CliAction::Event => {
             let event_json = match env::var("HERDR_PLUGIN_EVENT_JSON") {
@@ -91,7 +98,10 @@ fn run() -> Result<(), String> {
                 None => return Ok(()),
             }
         }
-        CliAction::Help | CliAction::Version | CliAction::CheckPaneVisibility(_) => {
+        CliAction::Help
+        | CliAction::Version
+        | CliAction::Cleanup
+        | CliAction::CheckPaneVisibility(_) => {
             unreachable!("handled before notification setup")
         }
     };
@@ -112,6 +122,14 @@ fn run() -> Result<(), String> {
         }
     }
 
+    if action != CliAction::Test {
+        if let Some(summary) =
+            notification_summary(&notification.pane_id, &herdr_bin, &notification.status)
+        {
+            notification.body = summary;
+        }
+    }
+
     reset_notification_clearance(&notification.pane_id)
         .map_err(|err| format!("failed to reset notification clearance: {err}"))?;
 
@@ -121,6 +139,7 @@ fn run() -> Result<(), String> {
         &herdr_bin,
         &notifier_bin,
         notification_decision == NotificationDecision::SendWithVisibilityMonitor,
+        action == CliAction::Test,
     )
     .map_err(|err| format!("failed to write focus script: {err}"))?;
 

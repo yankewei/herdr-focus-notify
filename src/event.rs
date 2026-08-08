@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 use crate::icons::agent_icon_path;
 use crate::notification::FocusNotification;
@@ -17,6 +18,7 @@ struct EventData {
     display_agent: Option<String>,
     title: Option<String>,
     custom_status: Option<String>,
+    state_labels: Option<BTreeMap<String, String>>,
 }
 
 pub(crate) fn notification_from_event_json(
@@ -56,8 +58,8 @@ pub(crate) fn notification_from_event_json(
         "done" => format!("{agent} finished"),
         _ => unreachable!("status already filtered"),
     };
-    let title = if let Some(custom_status) = first_non_empty([data.custom_status.as_deref()]) {
-        format!("{base_title}: {custom_status}")
+    let title = if let Some(status_detail) = status_detail(&data) {
+        format!("{base_title}: {status_detail}")
     } else {
         base_title
     };
@@ -73,6 +75,20 @@ pub(crate) fn notification_from_event_json(
         group,
         app_icon,
     }))
+}
+
+fn status_detail(data: &EventData) -> Option<String> {
+    first_non_empty([data.custom_status.as_deref()])
+        .or_else(|| {
+            data.state_labels.as_ref().and_then(|labels| {
+                labels
+                    .values()
+                    .map(String::as_str)
+                    .find(|value| !value.trim().is_empty())
+            })
+        })
+        .map(str::trim)
+        .map(str::to_string)
 }
 
 pub(crate) fn focused_pane_id_from_event_json(json: &str) -> Result<Option<String>, String> {
@@ -165,6 +181,22 @@ mod tests {
         assert_eq!(notification.title, "Codex finished");
         assert_eq!(notification.body, "Implement plugin");
         assert!(notification.app_icon.is_some());
+    }
+
+    #[test]
+    fn uses_state_label_when_custom_status_is_missing() {
+        let json = r#"{
+            "data": {
+                "pane_id": "p1",
+                "agent_status": "blocked",
+                "agent": "Codex",
+                "state_labels": {"reason": "Needs an answer"}
+            }
+        }"#;
+
+        let notification = notification_from_event_json(json).unwrap().unwrap();
+
+        assert_eq!(notification.title, "Codex needs attention: Needs an answer");
     }
 
     #[test]

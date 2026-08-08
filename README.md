@@ -11,7 +11,7 @@ It is designed to notify you only when the change is easy to miss: when Herdr is
 ### 1. Install the requirements
 
 - macOS
-- Herdr `0.7.3` or later
+- Herdr `0.7.5` or later
 - [alerter](https://github.com/vjeantet/alerter), which displays the clickable notification
 
 Install alerter:
@@ -68,6 +68,8 @@ By default, `blocked` and `done` status changes can produce a notification. With
 
 Clicking a notification activates the configured terminal app, then runs `herdr agent focus <pane>`.
 
+For `blocked` and `done` notifications, the plugin also asks Herdr to explain the detected state and uses the matched rule and screen evidence as the notification body when available. If Herdr cannot provide an explanation, it falls back to the event title.
+
 Without `ACTIVATE_APP`, focusing still works, but the plugin cannot reliably detect that you have already seen a pane. It may therefore send extra notifications.
 
 When you manually focus the matching pane in Herdr while the configured terminal is frontmost, its pending notification is removed.
@@ -83,6 +85,8 @@ There are six supported settings, but you normally need only `HERDR_FOCUS_NOTIFY
 - `HERDR_FOCUS_NOTIFY_ENABLED=0`: pause notifications without removing the plugin.
 - `HERDR_FOCUS_NOTIFY_NOTIFIER`: full `alerter` path when auto-detection fails.
 - `HERDR_FOCUS_NOTIFY_DEBUG=1`: enable diagnostics in the plugin logs and `focus-click.log`.
+
+The `--test` action caps the test notification timeout at 10 seconds so a test run does not block for the normal 3600-second default.
 
 The `.env` file supports `KEY=value`, optional `export KEY=value`, quoted values, and inline comments. Paths in `ACTIVATE_APP` are passed directly to `open`; use an absolute path rather than `~`.
 

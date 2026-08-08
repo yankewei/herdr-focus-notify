@@ -4,6 +4,7 @@ pub(crate) enum CliAction {
     Test,
     Help,
     Version,
+    Cleanup,
     CheckPaneVisibility(String),
 }
 
@@ -21,6 +22,7 @@ where
             "--test" => set_action(&mut action, CliAction::Test, arg)?,
             "-h" | "--help" => set_action(&mut action, CliAction::Help, arg)?,
             "-V" | "--version" => set_action(&mut action, CliAction::Version, arg)?,
+            "--cleanup" => set_action(&mut action, CliAction::Cleanup, arg)?,
             "--check-pane-visibility" => {
                 if action != CliAction::Event {
                     return Err(format!("cannot combine {arg} with another command"));
@@ -52,7 +54,7 @@ fn set_action(action: &mut CliAction, next: CliAction, arg: &str) -> Result<(), 
 
 pub(crate) fn print_usage() {
     println!(
-        "herdr-focus-notify {}\n\nUsage:\n  herdr-focus-notify\n  herdr-focus-notify --test\n\nOptions:\n  --test       Send a test focus notification\n  -h, --help   Show this help\n  -V, --version\n              Show the version",
+        "herdr-focus-notify {}\n\nUsage:\n  herdr-focus-notify\n  herdr-focus-notify --test\n  herdr-focus-notify --cleanup\n\nOptions:\n  --test       Send a test focus notification\n  --cleanup    Remove stale generated state files\n  -h, --help   Show this help\n  -V, --version\n              Show the version",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -72,6 +74,7 @@ mod tests {
         assert_eq!(parse_cli_args(["-h"]).unwrap(), CliAction::Help);
         assert_eq!(parse_cli_args(["--version"]).unwrap(), CliAction::Version);
         assert_eq!(parse_cli_args(["-V"]).unwrap(), CliAction::Version);
+        assert_eq!(parse_cli_args(["--cleanup"]).unwrap(), CliAction::Cleanup);
         assert_eq!(
             parse_cli_args(["--check-pane-visibility", "w1:p2"]).unwrap(),
             CliAction::CheckPaneVisibility("w1:p2".to_string())
