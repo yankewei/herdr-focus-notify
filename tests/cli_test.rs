@@ -308,15 +308,22 @@ fn normal_notification_uses_herdr_explain_summary() {
         .unwrap();
 
     assert!(output.status.success());
+    // The notifier runs in a detached script, so the log file can exist
+    // (truncated by the shell redirect) before its content is written.
+    // Poll for the content itself instead of just file existence.
+    let mut notifier_output = String::new();
     for _ in 0..500 {
-        if notifier_log.exists() {
+        notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
+        if !notifier_output.is_empty() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
-    assert!(notifier_output.contains("Needs permission: Do you want to allow this command?"));
+    assert!(
+        notifier_output.contains("Needs permission: Do you want to allow this command?"),
+        "unexpected notifier output: {notifier_output:?}"
+    );
     fs::remove_dir_all(temp_dir).unwrap();
 }
 
