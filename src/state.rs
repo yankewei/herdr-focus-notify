@@ -61,9 +61,15 @@ fn cleanup_stale_state_files_in(
             continue;
         };
 
+        // Cleared markers only gate the gap between a new notification being
+        // queued and its script starting (seconds); every send resets the
+        // marker first, so any marker old enough to be stale here is inert.
         let retention = if name.starts_with("focus-") && name.ends_with(".sh") {
             Some(script_retention)
-        } else if name.contains(".result.") || name.contains(".status.") {
+        } else if name.contains(".result.")
+            || name.contains(".status.")
+            || name.ends_with(".cleared")
+        {
             Some(temp_file_retention)
         } else {
             None
@@ -109,6 +115,7 @@ mod tests {
         fs::write(dir.join("focus-old.sh"), "old").unwrap();
         fs::write(dir.join("herdr-w1-p1.result.123456"), "old").unwrap();
         fs::write(dir.join("herdr-w1-p1.status.123456"), "old").unwrap();
+        fs::write(dir.join("herdr-w1-p1.cleared"), "old").unwrap();
         fs::write(dir.join("focus-click.log"), "keep").unwrap();
 
         cleanup_stale_state_files_in(&dir, SystemTime::now(), Duration::ZERO, Duration::ZERO)
@@ -117,6 +124,7 @@ mod tests {
         assert!(!dir.join("focus-old.sh").exists());
         assert!(!dir.join("herdr-w1-p1.result.123456").exists());
         assert!(!dir.join("herdr-w1-p1.status.123456").exists());
+        assert!(!dir.join("herdr-w1-p1.cleared").exists());
         assert!(dir.join("focus-click.log").exists());
         fs::remove_dir_all(dir).unwrap();
     }

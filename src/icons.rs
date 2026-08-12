@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::state::plugin_state_dir;
@@ -194,18 +194,24 @@ fn icon_for_agent(name: &str) -> Option<&'static AgentIcon> {
 }
 
 fn write_embedded_icon(icon: &AgentIcon) -> Option<String> {
-    let dir = icon_state_dir();
-    fs::create_dir_all(&dir).ok()?;
+    write_embedded_icon_into(&icon_state_dir(), icon)
+}
 
+fn write_embedded_icon_into(dir: &Path, icon: &AgentIcon) -> Option<String> {
     let path = dir.join(icon.file);
-    let temp_path = dir.join(format!(
-        ".{}-{}-{}",
-        icon.file,
-        std::process::id(),
-        ICON_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::write(&temp_path, icon.bytes).ok()?;
-    fs::rename(temp_path, &path).ok()?;
+    // Icons are immutable constants; a complete file (rename is atomic) is
+    // always the right bytes, so skip the rewrite entirely.
+    if !path.is_file() {
+        fs::create_dir_all(dir).ok()?;
+        let temp_path = dir.join(format!(
+            ".{}-{}-{}",
+            icon.file,
+            std::process::id(),
+            ICON_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&temp_path, icon.bytes).ok()?;
+        fs::rename(temp_path, &path).ok()?;
+    }
 
     Some(path.to_string_lossy().into_owned())
 }
@@ -284,5 +290,34 @@ mod tests {
     #[test]
     fn ignores_unknown_agents() {
         assert_eq!(agent_icon_path(&[Some("unknown")]), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reuses_an_existing_icon_file() {
+        use std::os::unix::fs::MetadataExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-focus-notify-icons-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let icon = &AGENT_ICONS[0];
+        let path = write_embedded_icon_into(&dir, icon).unwrap();
+        let inode = fs::metadata(&path).unwrap().ino();
+
+        let again = write_embedded_icon_into(&dir, icon).unwrap();
+
+        assert_eq!(path, again);
+        // Rewriting would rename a fresh temp file over the target and change
+        // its inode; an unchanged inode proves the reuse short-circuit.
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        fs::remove_dir_all(dir).unwrap();
     }
 }

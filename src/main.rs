@@ -83,9 +83,9 @@ fn run() -> Result<(), String> {
                 };
 
                 if should_clear_notification_on_focus() {
+                    let notifier_bin = resolve_notifier_bin()?;
                     mark_notification_cleared(&pane_id)
                         .map_err(|err| format!("failed to mark notification as cleared: {err}"))?;
-                    let notifier_bin = resolve_notifier_bin()?;
                     remove_notification(&pane_id, &notifier_bin)
                         .map_err(|err| format!("failed to remove notification: {err}"))?;
                 }

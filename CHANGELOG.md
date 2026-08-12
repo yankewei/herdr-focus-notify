@@ -2,6 +2,17 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [0.3.9] - 2026-08-12
+
+### Changed
+
+- Reuse already-extracted agent icons instead of rewriting them on every notification.
+
+### Fixed
+
+- Clean stale `.cleared` focus markers during state-directory maintenance.
+- Do not leave a `.cleared` marker behind when the notifier binary cannot be resolved.
+
 ## [Unreleased]
 
 Nothing yet.

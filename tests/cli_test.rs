@@ -5,7 +5,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -79,16 +79,45 @@ fn disabled_test_mode_is_quiet_even_when_notifier_config_is_bad() {
 
 #[cfg(unix)]
 #[test]
+fn focus_event_without_notifier_leaves_no_cleared_marker() {
+    let temp_dir = temp_test_dir();
+
+    // Both bundle-ID queries answer with the configured app, so the
+    // notification would normally be marked as cleared.
+    let osascript = temp_dir.join("osascript");
+    write_executable(
+        &osascript,
+        "#!/bin/sh\nprintf '%s\\n' 'com.example.terminal'\n",
+    );
+
+    let state_dir = temp_dir.join("state");
+    let path = path_with_temp_dir(&temp_dir);
+    let output = binary()
+        .env("HERDR_PLUGIN_EVENT", "pane.focused")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"pane.focused","data":{"pane_id":"w1:p2"}}"#,
+        )
+        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
+        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", "/definitely/missing")
+        .env("HERDR_PLUGIN_STATE_DIR", &state_dir)
+        .env("PATH", path)
+        .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
+        .output()
+        .unwrap();
+
+    // The notifier failure must surface, but it must not leave a stale
+    // cleared marker behind for the focused pane.
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("configured notifier"));
+    assert!(!state_dir.join("herdr-w1-p2.cleared").exists());
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn focus_event_removes_notification_for_foreground_terminal() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-focus-notify-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = temp_test_dir();
 
     let osascript = temp_dir.join("osascript");
     write_executable(
@@ -103,11 +132,7 @@ fn focus_event_removes_notification_for_foreground_terminal() {
     );
 
     let notifier_log = temp_dir.join("notifier.log");
-    let path = format!(
-        "{}:{}",
-        temp_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_temp_dir(&temp_dir);
     let output = binary()
         .env("HERDR_PLUGIN_EVENT", "pane.focused")
         .env(
@@ -134,15 +159,7 @@ fn focus_event_removes_notification_for_foreground_terminal() {
 #[cfg(unix)]
 #[test]
 fn visible_focused_pane_removes_its_pending_notification() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-focus-notify-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = temp_test_dir();
 
     let frontmost_state = temp_dir.join("frontmost-bundle-id");
     fs::write(&frontmost_state, "com.example.other\n").unwrap();
@@ -167,11 +184,7 @@ fn visible_focused_pane_removes_its_pending_notification() {
 
     let notifier_log = temp_dir.join("notifier.log");
     let remove_signal = temp_dir.join("removed");
-    let path = format!(
-        "{}:{}",
-        temp_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_temp_dir(&temp_dir);
     let child = binary()
         .arg("--test")
         .env("HERDR_BIN_PATH", &herdr)
@@ -204,15 +217,7 @@ fn visible_focused_pane_removes_its_pending_notification() {
 #[cfg(unix)]
 #[test]
 fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-focus-notify-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = temp_test_dir();
 
     // Both bundle-ID queries answer with the configured app, so the pane
     // counts as visible and a normal event would be skipped.
@@ -235,11 +240,7 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
     );
 
     let notifier_log = temp_dir.join("notifier.log");
-    let path = format!(
-        "{}:{}",
-        temp_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_temp_dir(&temp_dir);
     let output = binary()
         .arg("--test")
         // A filter that excludes the hardcoded test status must not suppress
@@ -264,15 +265,7 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
 #[cfg(unix)]
 #[test]
 fn normal_notification_uses_herdr_explain_summary() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-focus-notify-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = temp_test_dir();
 
     let herdr = temp_dir.join("herdr");
     write_executable(
@@ -287,11 +280,7 @@ fn normal_notification_uses_herdr_explain_summary() {
     );
 
     let notifier_log = temp_dir.join("notifier.log");
-    let path = format!(
-        "{}:{}",
-        temp_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_temp_dir(&temp_dir);
     let output = binary()
         .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
         .env(
@@ -330,15 +319,7 @@ fn normal_notification_uses_herdr_explain_summary() {
 #[cfg(unix)]
 #[test]
 fn unfocused_pane_does_not_start_a_visibility_monitor() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-focus-notify-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = temp_test_dir();
 
     let frontmost_state = temp_dir.join("frontmost-bundle-id");
     fs::write(&frontmost_state, "com.example.other\n").unwrap();
@@ -364,11 +345,7 @@ fn unfocused_pane_does_not_start_a_visibility_monitor() {
     );
 
     let notifier_log = temp_dir.join("notifier.log");
-    let path = format!(
-        "{}:{}",
-        temp_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path = path_with_temp_dir(&temp_dir);
     let output = binary()
         .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
         .env(
@@ -401,6 +378,29 @@ fn unfocused_pane_does_not_start_a_visibility_monitor() {
     let notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
     assert!(!notifier_output.contains("--remove\nherdr-w1-p2\n"));
     fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+fn temp_test_dir() -> PathBuf {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "herdr-focus-notify-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).unwrap();
+    temp_dir
+}
+
+#[cfg(unix)]
+fn path_with_temp_dir(temp_dir: &Path) -> String {
+    format!(
+        "{}:{}",
+        temp_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
 }
 
 #[cfg(unix)]
