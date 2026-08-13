@@ -2,6 +2,16 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [Unreleased]
+
+Nothing yet.
+
+## [0.3.10] - 2026-08-13
+
+### Changed
+
+- Replace Herdr detection-rule explanations with simple, status-specific notification titles and descriptions.
+
 ## [0.3.9] - 2026-08-12
 
 ### Changed
@@ -12,12 +22,6 @@ All notable changes to `herdr-focus-notify` are documented here.
 
 - Clean stale `.cleared` focus markers during state-directory maintenance.
 - Do not leave a `.cleared` marker behind when the notifier binary cannot be resolved.
-
-## [Unreleased]
-
-### Changed
-
-- Replace Herdr detection-rule explanations with simple, status-specific notification titles and descriptions.
 
 ## [0.3.8] - 2026-08-08
 
