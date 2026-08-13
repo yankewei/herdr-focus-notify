@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 use crate::icons::agent_icon_path;
 use crate::notification::FocusNotification;
@@ -16,9 +15,6 @@ struct EventData {
     agent_status: Option<String>,
     agent: Option<String>,
     display_agent: Option<String>,
-    title: Option<String>,
-    custom_status: Option<String>,
-    state_labels: Option<BTreeMap<String, String>>,
 }
 
 pub(crate) fn notification_from_event_json(
@@ -53,18 +49,17 @@ pub(crate) fn notification_from_event_json(
         .to_string();
     let app_icon = agent_icon_path(&[data.display_agent.as_deref(), data.agent.as_deref()]);
 
-    let base_title = match status.as_str() {
-        "blocked" => format!("{agent} needs attention"),
-        "done" => format!("{agent} finished"),
+    let (title, body) = match status.as_str() {
+        "blocked" => (
+            format!("{agent} needs your input"),
+            "Open the pane to review and respond.".to_string(),
+        ),
+        "done" => (
+            format!("{agent} finished"),
+            "Open the pane to review the result.".to_string(),
+        ),
         _ => unreachable!("status already filtered"),
     };
-    let title = if let Some(status_detail) = status_detail(&data) {
-        format!("{base_title}: {status_detail}")
-    } else {
-        base_title
-    };
-
-    let body = notification_body(&data);
     let group = notification_group_id(&pane_id);
 
     Ok(Some(FocusNotification {
@@ -75,20 +70,6 @@ pub(crate) fn notification_from_event_json(
         group,
         app_icon,
     }))
-}
-
-fn status_detail(data: &EventData) -> Option<String> {
-    first_non_empty([data.custom_status.as_deref()])
-        .or_else(|| {
-            data.state_labels.as_ref().and_then(|labels| {
-                labels
-                    .values()
-                    .map(String::as_str)
-                    .find(|value| !value.trim().is_empty())
-            })
-        })
-        .map(str::trim)
-        .map(str::to_string)
 }
 
 pub(crate) fn focused_pane_id_from_event_json(json: &str) -> Result<Option<String>, String> {
@@ -106,29 +87,12 @@ fn pane_id_from_event_data(data: &EventData) -> Option<String> {
         .map(str::to_string)
 }
 
-fn notification_body(data: &EventData) -> String {
-    first_non_empty([data.title.as_deref()])
-        .map(|text| truncate(text, 220))
-        .unwrap_or_else(|| "Click to focus this Herdr agent pane.".to_string())
-}
-
 fn first_non_empty<const N: usize>(values: [Option<&str>; N]) -> Option<&str> {
     values
         .into_iter()
         .flatten()
         .map(str::trim)
         .find(|value| !value.is_empty())
-}
-
-fn truncate(value: &str, max_chars: usize) -> String {
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
-    }
-
-    let mut output: String = trimmed.chars().take(max_chars.saturating_sub(3)).collect();
-    output.push_str("...");
-    output
 }
 
 #[cfg(test)]
@@ -154,8 +118,8 @@ mod tests {
 
         assert_eq!(notification.pane_id, "w1:p3");
         assert_eq!(notification.status, "blocked");
-        assert_eq!(notification.title, "Codex needs attention: Needs an answer");
-        assert_eq!(notification.body, "Implement plugin");
+        assert_eq!(notification.title, "Codex needs your input");
+        assert_eq!(notification.body, "Open the pane to review and respond.");
         assert_eq!(notification.group, "herdr-w1-p3");
         assert!(notification
             .app_icon
@@ -179,12 +143,12 @@ mod tests {
 
         assert_eq!(notification.status, "done");
         assert_eq!(notification.title, "Codex finished");
-        assert_eq!(notification.body, "Implement plugin");
+        assert_eq!(notification.body, "Open the pane to review the result.");
         assert!(notification.app_icon.is_some());
     }
 
     #[test]
-    fn uses_state_label_when_custom_status_is_missing() {
+    fn keeps_notification_copy_simple_when_event_has_status_details() {
         let json = r#"{
             "data": {
                 "pane_id": "p1",
@@ -196,7 +160,8 @@ mod tests {
 
         let notification = notification_from_event_json(json).unwrap().unwrap();
 
-        assert_eq!(notification.title, "Codex needs attention: Needs an answer");
+        assert_eq!(notification.title, "Codex needs your input");
+        assert_eq!(notification.body, "Open the pane to review and respond.");
     }
 
     #[test]

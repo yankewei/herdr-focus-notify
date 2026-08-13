@@ -66,7 +66,7 @@ HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
 
 点击通知后，插件会激活配置的终端 App，然后执行 `herdr agent focus <pane>`。未配置 `ACTIVATE_APP` 时，聚焦仍能工作，但插件无法可靠判断你是否已查看 pane，因此可能会多发通知。
 
-对于 `blocked` 和 `done` 通知，插件还会请求 Herdr 解释当前检测到的状态，并在可用时使用匹配规则和屏幕证据作为通知正文。如果 Herdr 无法提供解释，则回退到事件标题。
+`blocked` 通知会提示 Agent 需要你的输入，并引导你查看和回复；`done` 通知会提示 Agent 已完成，并引导你查看结果。插件不会读取或总结 pane 内容。
 
 配置的终端 App 在前台时，你在 Herdr 中手动聚焦对应 pane 后，待处理通知会被移除。如果通知到达时 pane 已经是 active，切回该终端 App 后，通知会在数秒内移除。
 

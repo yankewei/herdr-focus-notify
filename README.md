@@ -68,7 +68,7 @@ By default, `blocked` and `done` status changes can produce a notification. With
 
 Clicking a notification activates the configured terminal app, then runs `herdr agent focus <pane>`.
 
-For `blocked` and `done` notifications, the plugin also asks Herdr to explain the detected state and uses the matched rule and screen evidence as the notification body when available. If Herdr cannot provide an explanation, it falls back to the event title.
+Blocked notifications say that the agent needs your input and prompt you to review and respond. Done notifications say that the agent finished and prompt you to review the result. The plugin does not read or summarize pane contents.
 
 Without `ACTIVATE_APP`, focusing still works, but the plugin cannot reliably detect that you have already seen a pane. It may therefore send extra notifications.
 

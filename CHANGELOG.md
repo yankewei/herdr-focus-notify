@@ -15,7 +15,9 @@ All notable changes to `herdr-focus-notify` are documented here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Replace Herdr detection-rule explanations with simple, status-specific notification titles and descriptions.
 
 ## [0.3.8] - 2026-08-08
 
