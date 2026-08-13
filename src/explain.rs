@@ -44,13 +44,17 @@ pub(crate) fn notification_summary(
         return None;
     }
 
-    let rule = response.matched_rule.or_else(|| {
-        response
-            .evaluated_rules
-            .into_iter()
-            .find(|rule| rule.matched == Some(true))
-    });
-    let rule = rule?;
+    summary_from_response(&response)
+}
+
+// herdr's `matched_rule` carries no evidence; the matching entry in
+// `evaluated_rules` does, so prefer it when present.
+fn summary_from_response(response: &ExplainResponse) -> Option<String> {
+    let rule = response
+        .evaluated_rules
+        .iter()
+        .find(|rule| rule.matched == Some(true))
+        .or(response.matched_rule.as_ref())?;
 
     let rule_label = rule.id.as_deref().map(humanize_rule_id);
     let evidence = rule.evidence.as_ref().and_then(evidence_summary);
@@ -147,55 +151,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_summary_from_matched_rule_and_evidence() {
+    fn builds_summary_from_matched_evaluated_rule_with_evidence() {
+        // herdr's real shape: matched_rule is bare, evidence lives on the
+        // matching entry in evaluated_rules.
         let json = br#"{
             "state": "blocked",
-            "matched_rule": {
+            "matched_rule": {"id": "needs_permission"},
+            "evaluated_rules": [{
                 "id": "needs_permission",
+                "matched": true,
                 "evidence": {
                     "contains": ["Do you want to allow"],
                     "region_preview": "\u001b[31mDo you want to allow this command?\u001b[0m"
                 }
-            },
-            "evaluated_rules": []
-        }"#;
-
-        let response: ExplainResponse = serde_json::from_slice(json).unwrap();
-        let rule = response.matched_rule.unwrap();
-
-        assert_eq!(
-            humanize_rule_id(rule.id.as_deref().unwrap()),
-            "Needs permission"
-        );
-        assert_eq!(
-            evidence_summary(rule.evidence.as_ref().unwrap()).unwrap(),
-            "Do you want to allow this command?"
-        );
-    }
-
-    #[test]
-    fn falls_back_to_a_matched_evaluated_rule() {
-        let json = br#"{
-            "state": "done",
-            "evaluated_rules": [{
-                "id": "completed",
-                "matched": true,
-                "evidence": {"region_preview": "All tests passed", "contains": []}
             }]
         }"#;
 
         let response: ExplainResponse = serde_json::from_slice(json).unwrap();
-        let rule = response
-            .evaluated_rules
-            .into_iter()
-            .find(|rule| rule.matched == Some(true))
-            .unwrap();
+        let summary = summary_from_response(&response).unwrap();
 
-        assert_eq!(rule.id.as_deref(), Some("completed"));
         assert_eq!(
-            evidence_summary(rule.evidence.as_ref().unwrap()).unwrap(),
-            "All tests passed"
+            summary,
+            "Needs permission: Do you want to allow this command?"
         );
+    }
+
+    #[test]
+    fn falls_back_to_bare_matched_rule_without_evidence() {
+        let json = br#"{
+            "state": "done",
+            "matched_rule": {"id": "finished_task"},
+            "evaluated_rules": []
+        }"#;
+
+        let response: ExplainResponse = serde_json::from_slice(json).unwrap();
+        let summary = summary_from_response(&response).unwrap();
+
+        assert_eq!(summary, "Herdr matched Finished task");
+    }
+
+    #[test]
+    fn returns_none_without_any_matched_rule() {
+        let json = br#"{
+            "state": "blocked",
+            "matched_rule": null,
+            "evaluated_rules": [{"id": "trust_directory", "matched": false}]
+        }"#;
+
+        let response: ExplainResponse = serde_json::from_slice(json).unwrap();
+        assert_eq!(summary_from_response(&response), None);
     }
 
     #[test]
