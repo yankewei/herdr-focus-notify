@@ -15,7 +15,9 @@ All notable changes to `herdr-focus-notify` are documented here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Simplify notification bodies to the event title or a generic focus prompt instead of Herdr detection-rule explanations.
 
 ## [0.3.8] - 2026-08-08
 

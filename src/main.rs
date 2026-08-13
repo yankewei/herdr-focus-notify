@@ -2,7 +2,6 @@ mod cli;
 mod config;
 mod event;
 mod executable;
-mod explain;
 mod focus;
 mod icons;
 mod notification;
@@ -18,7 +17,6 @@ use cli::{parse_cli_args, print_usage, CliAction};
 use config::{is_enabled, status_is_enabled};
 use event::{focused_pane_id_from_event_json, notification_from_event_json};
 use executable::resolve_herdr_bin;
-use explain::notification_summary;
 use focus::{
     notification_decision, should_clear_notification_on_focus, test_notification,
     NotificationDecision,
@@ -69,7 +67,7 @@ fn run() -> Result<(), String> {
 
     let herdr_bin = resolve_herdr_bin()?;
 
-    let mut notification = match action {
+    let notification = match action {
         CliAction::Test => test_notification(&herdr_bin),
         CliAction::Event => {
             let event_json = match env::var("HERDR_PLUGIN_EVENT_JSON") {
@@ -119,14 +117,6 @@ fn run() -> Result<(), String> {
             notification_decision = NotificationDecision::Send;
         } else {
             return Ok(());
-        }
-    }
-
-    if action != CliAction::Test {
-        if let Some(summary) =
-            notification_summary(&notification.pane_id, &herdr_bin, &notification.status)
-        {
-            notification.body = summary;
         }
     }
 

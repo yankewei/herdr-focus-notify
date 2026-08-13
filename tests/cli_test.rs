@@ -264,13 +264,13 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
 
 #[cfg(unix)]
 #[test]
-fn normal_notification_uses_herdr_explain_summary() {
+fn normal_notification_uses_event_title_without_requesting_an_explanation() {
     let temp_dir = temp_test_dir();
 
     let herdr = temp_dir.join("herdr");
     write_executable(
         &herdr,
-        "#!/bin/sh\nif [ \"$2\" = \"get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":false,\"pane_id\":\"w1:p2\"}}}'\nelif [ \"$2\" = \"explain\" ]; then\n  printf '%s\\n' '{\"state\":\"blocked\",\"matched_rule\":{\"id\":\"needs_permission\",\"evidence\":{\"contains\":[\"Do you want to allow\"],\"region_preview\":\"Do you want to allow this command?\"}}}'\nfi\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDR_LOG\"\nif [ \"$2\" = \"get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":false,\"pane_id\":\"w1:p2\"}}}'\nfi\n",
     );
 
     let notifier = temp_dir.join("alerter");
@@ -280,17 +280,19 @@ fn normal_notification_uses_herdr_explain_summary() {
     );
 
     let notifier_log = temp_dir.join("notifier.log");
+    let herdr_log = temp_dir.join("herdr.log");
     let path = path_with_temp_dir(&temp_dir);
     let output = binary()
         .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
         .env(
             "HERDR_PLUGIN_EVENT_JSON",
-            r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"blocked","agent":"Codex"}}"#,
+            r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"blocked","agent":"Codex","title":"Implement plugin"}}"#,
         )
         .env("HERDR_BIN_PATH", &herdr)
         .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
         .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
         .env("NOTIFIER_LOG", &notifier_log)
+        .env("HERDR_LOG", &herdr_log)
         .env("PATH", path)
         .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
         .output()
@@ -309,10 +311,10 @@ fn normal_notification_uses_herdr_explain_summary() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    assert!(
-        notifier_output.contains("Needs permission: Do you want to allow this command?"),
-        "unexpected notifier output: {notifier_output:?}"
-    );
+    assert!(notifier_output.contains("Implement plugin"));
+    assert!(!fs::read_to_string(&herdr_log)
+        .unwrap_or_default()
+        .contains("explain"));
     fs::remove_dir_all(temp_dir).unwrap();
 }
 
