@@ -264,7 +264,7 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
 
 #[cfg(unix)]
 #[test]
-fn normal_notification_uses_event_title_without_requesting_an_explanation() {
+fn normal_notification_uses_status_specific_copy_without_requesting_an_explanation() {
     let temp_dir = temp_test_dir();
 
     let herdr = temp_dir.join("herdr");
@@ -311,7 +311,9 @@ fn normal_notification_uses_event_title_without_requesting_an_explanation() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    assert!(notifier_output.contains("Implement plugin"));
+    assert!(notifier_output.contains("Codex needs your input"));
+    assert!(notifier_output.contains("Open the pane to review and respond."));
+    assert!(!notifier_output.contains("Implement plugin"));
     assert!(!fs::read_to_string(&herdr_log)
         .unwrap_or_default()
         .contains("explain"));

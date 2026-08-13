@@ -242,8 +242,8 @@ mod tests {
         FocusNotification {
             pane_id: "w1:p3".to_string(),
             status: "blocked".to_string(),
-            title: "Codex needs attention".to_string(),
-            body: "Needs an answer".to_string(),
+            title: "Codex needs your input".to_string(),
+            body: "Open the pane to review and respond.".to_string(),
             group: "herdr-w1-p3".to_string(),
             app_icon: Some("/tmp/codex icon.png".to_string()),
         }
@@ -287,8 +287,8 @@ mod tests {
         );
 
         assert!(script.starts_with("#!/bin/sh\n"));
-        assert!(script.contains("'/opt/homebrew/bin/alerter' --title 'Codex needs attention'"));
-        assert!(script.contains("--message 'Needs an answer'"));
+        assert!(script.contains("'/opt/homebrew/bin/alerter' --title 'Codex needs your input'"));
+        assert!(script.contains("--message 'Open the pane to review and respond.'"));
         assert!(script.contains("--group 'herdr-w1-p3'"));
         assert!(script.contains("--app-icon '/tmp/codex icon.png'"));
         assert!(script.contains("--actions 'Focus'"));
