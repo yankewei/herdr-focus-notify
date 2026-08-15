@@ -102,6 +102,6 @@ The `.env` file supports `KEY=value`, optional `export KEY=value`, quoted values
 
 ## Bundled icons
 
-Recognised agent names use bundled local icons, including Codex, Claude Code, Cursor, Gemini, GitHub Copilot, DeepSeek, Qwen, Kimi, OpenCode, OpenHands, Cline, Windsurf, Devin, and v0.
+Recognised agent names use bundled local icons, including Codex, Claude Code, Cursor, Gemini, GitHub Copilot, DeepSeek, Qwen, Kimi, OpenCode, OpenHands, Cline, Windsurf, Devin, omp, pi, and v0.
 
-The icons are vendored from `@lobehub/icons-static-png` under the MIT license. See `assets/icons/NOTICE.md`.
+The icons are vendored from `@lobehub/icons-static-png` under the MIT license, except `omp.png` and `pi.png`, which use the official logos of Oh My Pi and the Pi coding agent. See `assets/icons/NOTICE.md`.

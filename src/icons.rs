@@ -173,6 +173,18 @@ const AGENT_ICONS: &[AgentIcon] = &[
         file: "v0.png",
         bytes: include_bytes!("../assets/icons/agents/v0.png"),
     },
+    AgentIcon {
+        exact: &["omp", "ohmypi"],
+        substring: None,
+        file: "omp.png",
+        bytes: include_bytes!("../assets/icons/agents/omp.png"),
+    },
+    AgentIcon {
+        exact: &["pi"],
+        substring: None,
+        file: "pi.png",
+        bytes: include_bytes!("../assets/icons/agents/pi.png"),
+    },
 ];
 
 fn icon_for_agent(name: &str) -> Option<&'static AgentIcon> {
@@ -255,6 +267,9 @@ mod tests {
             ("Kimi Code", "kimi-color.png"),
             ("Moonshot AI", "kimi-color.png"),
             ("v0", "v0.png"),
+            ("omp", "omp.png"),
+            ("Oh My Pi", "omp.png"),
+            ("pi", "pi.png"),
         ];
 
         for (name, file) in cases {

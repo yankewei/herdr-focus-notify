@@ -76,7 +76,7 @@ Key variables observed in code:
 
 Important: `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` values containing `/` are passed to `open` directly; values without `/` are passed to `open -a`. Paths are **not shell-expanded**, so `~` is treated literally.
 
-Bundled agent icons are extracted from `@lobehub/icons-static-png` and attributed in `assets/icons/NOTICE.md`.
+Bundled agent icons are extracted from `@lobehub/icons-static-png` (except `omp.png` and `pi.png`, which use the official Oh My Pi and Pi logos) and attributed in `assets/icons/NOTICE.md`.
 
 ## Code Patterns and Conventions
 

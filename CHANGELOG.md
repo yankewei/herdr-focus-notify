@@ -4,7 +4,9 @@ All notable changes to `herdr-focus-notify` are documented here.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Show bundled notification icons for the `omp` and `pi` agents.
 
 ## [0.3.10] - 2026-08-13
 
