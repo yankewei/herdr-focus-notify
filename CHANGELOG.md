@@ -2,7 +2,7 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
-## [Unreleased]
+## [0.4.0] - 2026-08-18
 
 ### Added
 
@@ -12,6 +12,7 @@ All notable changes to `herdr-focus-notify` are documented here.
 ### Changed
 
 - Remove the hardcoded terminal bundle-id whitelist (`is_known_terminal_bundle`); terminal recognition now relies entirely on the per-workspace binding learned at focus time.
+- Internal refactor: terminal lookup collapsed from a set to the single bound value, and herdr subprocess calls deduplicated into one helper. No behavior change.
 - Remove all configuration: no `.env` file, no `HERDR_FOCUS_NOTIFY_*` variables. `blocked`/`done` notification, the 3600-second auto-dismiss timeout, alerting via `alerter` (auto-detected from `PATH` and common Homebrew paths), and per-workspace terminal activation are all built-in defaults. `HERDR_BIN_PATH` and `HERDR_PLUGIN_STATE_DIR` remain as environment hooks for tests and unusual installs.
 
 - Zero-configuration terminal detection: the plugin now learns the terminal Herdr runs in from `pane.focused` events (restricted to a whitelist of known terminals and IDEs) and uses it to activate the terminal on click and to skip notifications for panes you are already looking at.
