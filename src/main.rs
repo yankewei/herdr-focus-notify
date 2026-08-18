@@ -21,7 +21,10 @@ use focus::{
 };
 use notifier::{remove_notification, resolve_notifier_bin, send_notification};
 use script::write_focus_script;
-use state::{cleanup_stale_state_files, mark_notification_cleared, prune_stale_workspace_bindings, reset_notification_clearance};
+use state::{
+    cleanup_stale_state_files, mark_notification_cleared, prune_stale_workspace_bindings,
+    reset_notification_clearance,
+};
 
 fn main() -> ExitCode {
     match run() {
@@ -57,9 +60,10 @@ fn run() -> Result<(), String> {
         }
         CliAction::CheckPaneVisibility(pane_id) => {
             let herdr_bin = resolve_herdr_bin()?;
-            return (notification_decision(&pane_id, &herdr_bin) == NotificationDecision::Skip)
-                .then_some(())
-                .ok_or_else(|| "pane is not visible in the configured app".to_string());
+            if notification_decision(&pane_id, &herdr_bin) == NotificationDecision::Skip {
+                return Ok(());
+            }
+            return Err("pane is not visible in the configured app".to_string());
         }
         CliAction::Event | CliAction::Test => {}
     }
@@ -69,9 +73,8 @@ fn run() -> Result<(), String> {
     let notification = match action {
         CliAction::Test => test_notification(&herdr_bin),
         CliAction::Event => {
-            let event_json = match env::var("HERDR_PLUGIN_EVENT_JSON") {
-                Ok(value) => value,
-                Err(_) => return Ok(()),
+            let Ok(event_json) = env::var("HERDR_PLUGIN_EVENT_JSON") else {
+                return Ok(());
             };
 
             if env::var("HERDR_PLUGIN_EVENT").as_deref() == Ok("pane.focused") {

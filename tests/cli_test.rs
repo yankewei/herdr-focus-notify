@@ -35,7 +35,6 @@ fn no_event_is_quiet_without_any_output() {
     assert!(output.stderr.is_empty());
 }
 
-
 #[test]
 fn test_mode_reports_bad_configured_herdr_binary() {
     let output = binary()
@@ -48,9 +47,7 @@ fn test_mode_reports_bad_configured_herdr_binary() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("configured Herdr binary"));
 }
 
-
 #[cfg(unix)]
-
 #[cfg(unix)]
 #[test]
 fn focus_event_removes_notification_for_foreground_terminal() {
@@ -96,7 +93,6 @@ fn visible_focused_pane_removes_its_pending_notification() {
     let temp_dir = temp_test_dir();
 
     let frontmost_state = temp_dir.join("frontmost-bundle-id");
-
 
     let osascript = temp_dir.join("osascript");
     write_executable(

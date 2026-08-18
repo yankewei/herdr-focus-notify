@@ -7,7 +7,8 @@ use crate::util::{notification_group_id, shell_quote};
 
 pub(crate) fn resolve_notifier_bin() -> Result<String, String> {
     find_executable("alerter", alerter_candidate_paths()).ok_or_else(|| {
-        "no alerter notifier found; install alerter with `brew install vjeantet/tap/alerter`".to_string()
+        "no alerter notifier found; install alerter with `brew install vjeantet/tap/alerter`"
+            .to_string()
     })
 }
 

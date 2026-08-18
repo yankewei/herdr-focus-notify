@@ -5,9 +5,11 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::focus::effective_terminal_bundle_ids;
 use crate::notification::FocusNotification;
-use crate::state::{cleanup_stale_state_files, cleared_notification_marker_path, plugin_state_dir, prune_stale_workspace_bindings};
+use crate::state::{
+    cleanup_stale_state_files, cleared_notification_marker_path, plugin_state_dir,
+    prune_stale_workspace_bindings, remembered_terminal,
+};
 use crate::util::shell_quote;
 
 /// How long an unclicked notification stays up (seconds) before alerter
@@ -38,9 +40,11 @@ pub(crate) fn write_focus_script(
     notification.pane_id.hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
-    let executable_path = monitor_visibility
-        .then(|| env::current_exe().ok())
-        .flatten();
+    let executable_path = if monitor_visibility {
+        env::current_exe().ok()
+    } else {
+        None
+    };
     let script = focus_script_content_with_timeout(
         notification,
         herdr_bin,
@@ -62,10 +66,11 @@ fn focus_script_content_with_timeout(
     timeout_secs: u64,
     executable_path: Option<&Path>,
 ) -> String {
-    let workspace = crate::util::workspace_id_from_pane_id(&notification.pane_id).unwrap_or("default");
+    let workspace =
+        crate::util::workspace_id_from_pane_id(&notification.pane_id).unwrap_or("default");
     // The visibility monitor needs a terminal it can match the frontmost app
     // against; with none configured or learned, deliver a plain notification.
-    let visibility_check_binary = if effective_terminal_bundle_ids(workspace).is_empty() {
+    let visibility_check_binary = if remembered_terminal(workspace).is_none() {
         None
     } else {
         executable_path
@@ -219,7 +224,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn alerter_script_invokes_alerter_and_runs_focus_on_click() {
         let script = focus_script_content_with_timeout(
@@ -283,7 +287,6 @@ mod tests {
         assert_eq!(test_timeout_secs(5), 5);
     }
 
-
     #[test]
     fn alerter_script_includes_activation_when_configured() {
         let script = alerter_focus_script(
@@ -321,5 +324,4 @@ mod tests {
         );
         assert!(script.contains("kill \"$monitor_pid\" 2>/dev/null"));
     }
-
 }

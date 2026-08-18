@@ -53,19 +53,22 @@ pub(crate) fn notification_decision(pane_id: &str, herdr_bin: &str) -> Notificat
     let workspace = crate::util::workspace_id_from_pane_id(pane_id).unwrap_or("default");
     notification_decision_from_focus_and_bundles(
         pane_is_focused(pane_id, herdr_bin),
-        effective_terminal_bundle_ids(workspace),
+        crate::state::remembered_terminal(workspace),
         frontmost_bundle_id(),
     )
 }
 
 /// Whether the previously queued notification for the now-focused pane can be
 /// removed. The user only sees the pane when the frontmost app is the terminal
-/// Herdr runs in, so removal requires the frontmost bundle id to be a known or
-/// learned terminal (never a random app).
+/// bound to its workspace, so removal requires the frontmost bundle id to be
+/// that terminal (never a random app).
 pub(crate) fn should_clear_notification_on_focus(workspace: &str) -> bool {
-    match frontmost_bundle_id() {
-        Some(frontmost) => effective_terminal_bundle_ids(workspace).contains(&frontmost),
-        None => false,
+    match (
+        frontmost_bundle_id(),
+        crate::state::remembered_terminal(workspace),
+    ) {
+        (Some(frontmost), Some(bound)) => frontmost == bound,
+        _ => false,
     }
 }
 
@@ -88,42 +91,28 @@ pub(crate) fn learn_terminal_from_frontmost(workspace: &str) -> Option<String> {
     Some(frontmost)
 }
 
-/// The apps that count as "the user is looking at Herdr" for `workspace`:
-/// explicit `ACTIVATE_APP` targets first, then the workspace's own binding,
-/// deduplicated.
-pub(crate) fn effective_terminal_bundle_ids(workspace: &str) -> Vec<String> {
-    crate::state::remembered_terminal(workspace)
-        .into_iter()
-        .collect()
-}
-
 fn pane_is_focused(pane_id: &str, herdr_bin: &str) -> bool {
-    let output = Command::new(herdr_bin)
-        .args(["agent", "get", pane_id])
-        .output();
-
-    let Ok(output) = output else {
+    let Some(json) = run_herdr(herdr_bin, &["agent", "get", pane_id]) else {
         return false;
     };
-    if !output.status.success() {
-        return false;
-    }
-
-    let Ok(json) = String::from_utf8(output.stdout) else {
-        return false;
-    };
-
     agent_is_focused_from_get_json(&json, pane_id)
         .ok()
         .flatten()
         .unwrap_or(false)
 }
 
-fn frontmost_bundle_id() -> Option<String> {
-    frontmost_bundle_id_via_applescript()
+/// Runs herdr with the given arguments and returns its stdout on success.
+/// None when the binary is missing, the command fails, or the output is not
+/// valid UTF-8.
+fn run_herdr(herdr_bin: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(herdr_bin).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
 }
 
-fn frontmost_bundle_id_via_applescript() -> Option<String> {
+fn frontmost_bundle_id() -> Option<String> {
     let output = Command::new("osascript")
         .arg("-e")
         .arg("tell application \"System Events\" to return bundle identifier of first application process whose frontmost is true")
@@ -141,17 +130,7 @@ fn frontmost_bundle_id_via_applescript() -> Option<String> {
 }
 
 fn focused_pane_id(herdr_bin: &str) -> Option<String> {
-    let output = Command::new(herdr_bin)
-        .arg("pane")
-        .arg("list")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let json = String::from_utf8(output.stdout).ok()?;
+    let json = run_herdr(herdr_bin, &["pane", "list"])?;
     focused_pane_id_from_pane_list_json(&json).ok().flatten()
 }
 
@@ -161,10 +140,11 @@ fn focused_pane_id_from_pane_list_json(json: &str) -> Result<Option<String>, Str
 
     Ok(envelope.result.and_then(|result| {
         result.panes.into_iter().find_map(|agent| {
+            if !agent.focused {
+                return None;
+            }
             agent
-                .focused
-                .then_some(agent.pane_id)
-                .flatten()
+                .pane_id
                 .map(|pane_id| pane_id.trim().to_string())
                 .filter(|pane_id| !pane_id.is_empty())
         })
@@ -191,18 +171,10 @@ fn agent_is_focused_from_get_json(
 /// empty output, or no panes at all) so callers never prune bindings against
 /// an empty world — e.g. right after Herdr itself started.
 pub(crate) fn live_workspace_ids(herdr_bin: &str) -> Option<Vec<String>> {
-    let output = Command::new(herdr_bin)
-        .arg("pane")
-        .arg("list")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let json = String::from_utf8(output.stdout).ok()?;
-    let live = live_workspace_ids_from_pane_list_json(&json).ok().flatten()?;
+    let json = run_herdr(herdr_bin, &["pane", "list"])?;
+    let live = live_workspace_ids_from_pane_list_json(&json)
+        .ok()
+        .flatten()?;
     if live.is_empty() {
         return None;
     }
@@ -230,18 +202,16 @@ fn live_workspace_ids_from_pane_list_json(json: &str) -> Result<Option<Vec<Strin
 
 fn notification_decision_from_focus_and_bundles(
     pane_is_focused: bool,
-    known_terminals: Vec<String>,
+    bound_terminal: Option<String>,
     frontmost: Option<String>,
 ) -> NotificationDecision {
     if !pane_is_focused {
         return NotificationDecision::Send;
     }
 
-    match frontmost {
-        Some(frontmost) if known_terminals.iter().any(|id| id == &frontmost) => {
-            NotificationDecision::Skip
-        }
-        Some(_) if !known_terminals.is_empty() => NotificationDecision::SendWithVisibilityMonitor,
+    match (frontmost, bound_terminal) {
+        (Some(frontmost), Some(bound)) if frontmost == bound => NotificationDecision::Skip,
+        (Some(_), Some(_)) => NotificationDecision::SendWithVisibilityMonitor,
         _ => NotificationDecision::Send,
     }
 }
@@ -315,11 +285,11 @@ mod tests {
 
     #[test]
     fn decides_when_to_skip_or_monitor_notifications() {
-        // Pane focused + frontmost matches a known terminal -> skip.
+        // Pane focused + frontmost matches the bound terminal -> skip.
         assert_eq!(
             notification_decision_from_focus_and_bundles(
                 true,
-                vec!["com.example.Herdr".to_string()],
+                Some("com.example.Herdr".to_string()),
                 Some("com.example.Herdr".to_string())
             ),
             NotificationDecision::Skip
@@ -328,36 +298,36 @@ mod tests {
         assert_eq!(
             notification_decision_from_focus_and_bundles(
                 true,
-                vec!["com.googlecode.iterm2".to_string()],
+                Some("com.googlecode.iterm2".to_string()),
                 Some("com.googlecode.iterm2".to_string())
             ),
             NotificationDecision::Skip
         );
-        // Pane focused + frontmost outside the bound set -> notify, with a
-        // visibility monitor since a terminal is known.
+        // Pane focused + frontmost outside the bound terminal -> notify, with
+        // a visibility monitor since a terminal is bound.
         assert_eq!(
             notification_decision_from_focus_and_bundles(
                 true,
-                vec!["com.example.Herdr".to_string()],
+                Some("com.example.Herdr".to_string()),
                 Some("com.apple.Terminal".to_string())
             ),
             NotificationDecision::SendWithVisibilityMonitor
         );
         // Pane focused + frontmost is a non-terminal app and a terminal is
-        // known -> notify with a visibility monitor so it auto-dismisses.
+        // bound -> notify with a visibility monitor so it auto-dismisses.
         assert_eq!(
             notification_decision_from_focus_and_bundles(
                 true,
-                vec!["com.example.Herdr".to_string()],
+                Some("com.example.Herdr".to_string()),
                 Some("com.google.Chrome".to_string())
             ),
             NotificationDecision::SendWithVisibilityMonitor
         );
-        // Pane focused + unknown frontmost with no known terminal -> notify.
+        // Pane focused + frontmost with no bound terminal -> notify.
         assert_eq!(
             notification_decision_from_focus_and_bundles(
                 true,
-                vec![],
+                None,
                 Some("com.google.Chrome".to_string())
             ),
             NotificationDecision::Send
@@ -366,7 +336,7 @@ mod tests {
         assert_eq!(
             notification_decision_from_focus_and_bundles(
                 true,
-                vec!["com.example.Herdr".to_string()],
+                Some("com.example.Herdr".to_string()),
                 None
             ),
             NotificationDecision::Send
@@ -375,12 +345,10 @@ mod tests {
         assert_eq!(
             notification_decision_from_focus_and_bundles(
                 false,
-                vec!["com.example.Herdr".to_string()],
+                Some("com.example.Herdr".to_string()),
                 Some("com.example.Herdr".to_string())
             ),
             NotificationDecision::Send
         );
     }
-
-
 }

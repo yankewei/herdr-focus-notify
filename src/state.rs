@@ -59,7 +59,10 @@ pub(crate) fn prune_stale_workspace_bindings(herdr_bin: &str) -> io::Result<()> 
     remember_bindings_into(&state_dir, &bindings)
 }
 
-fn remember_bindings_into(dir: &Path, bindings: &std::collections::HashMap<String, String>) -> io::Result<()> {
+fn remember_bindings_into(
+    dir: &Path,
+    bindings: &std::collections::HashMap<String, String>,
+) -> io::Result<()> {
     let path = dir.join("terminal-memory.json");
     let temp_path = dir.join(format!(".terminal-memory-{}.tmp", std::process::id()));
     let json = serde_json::json!({ "workspaces": bindings });
@@ -128,6 +131,25 @@ pub(crate) fn cleanup_stale_state_files() -> io::Result<()> {
     )
 }
 
+/// The retention period for a generated state file, or None when the file is
+/// not managed by cleanup. Cleared markers only gate the gap between a new
+/// notification being queued and its script starting (seconds); every send
+/// resets the marker first, so any marker old enough to be stale here is
+/// inert.
+fn retention_for(
+    name: &str,
+    script_retention: Duration,
+    temp_file_retention: Duration,
+) -> Option<Duration> {
+    if name.starts_with("focus-") && name.ends_with(".sh") {
+        Some(script_retention)
+    } else if name.contains(".result.") || name.contains(".status.") || name.ends_with(".cleared") {
+        Some(temp_file_retention)
+    } else {
+        None
+    }
+}
+
 fn cleanup_stale_state_files_in(
     state_dir: &Path,
     now: SystemTime,
@@ -147,21 +169,7 @@ fn cleanup_stale_state_files_in(
             continue;
         };
 
-        // Cleared markers only gate the gap between a new notification being
-        // queued and its script starting (seconds); every send resets the
-        // marker first, so any marker old enough to be stale here is inert.
-        let retention = if name.starts_with("focus-") && name.ends_with(".sh") {
-            Some(script_retention)
-        } else if name.contains(".result.")
-            || name.contains(".status.")
-            || name.ends_with(".cleared")
-        {
-            Some(temp_file_retention)
-        } else {
-            None
-        };
-
-        let Some(retention) = retention else {
+        let Some(retention) = retention_for(name, script_retention, temp_file_retention) else {
             continue;
         };
         if !path.is_file() {
@@ -242,15 +250,11 @@ mod tests {
         // Overwriting one workspace does not disturb the other.
         remember_terminal_into(&dir, "w1", "app.warp").unwrap();
         let bindings = read_terminal_bindings_from(&path).expect("bindings should exist");
-        assert_eq!(
-            bindings.get("w1").map(String::as_str),
-            Some("app.warp")
-        );
+        assert_eq!(bindings.get("w1").map(String::as_str), Some("app.warp"));
         assert_eq!(
             bindings.get("w2").map(String::as_str),
             Some("net.kovidgoyal.kitty")
         );
-
 
         fs::remove_dir_all(dir).unwrap();
     }
