@@ -17,6 +17,12 @@ struct EventData {
     display_agent: Option<String>,
 }
 
+/// The agent statuses worth notifying about. `blocked` and `done` are the
+/// only ones needing the user's action; everything else is noise.
+pub(crate) fn status_is_enabled(status: &str) -> bool {
+    matches!(status, "blocked" | "done")
+}
+
 pub(crate) fn notification_from_event_json(
     json: &str,
 ) -> Result<Option<FocusNotification>, String> {
@@ -34,9 +40,8 @@ pub(crate) fn notification_from_event_json(
         .to_ascii_lowercase();
 
     // Only blocked and done need user action, so they are the only statuses
-    // that can ever notify; HERDR_FOCUS_NOTIFY_STATUSES can only narrow this
-    // set afterwards (see config::status_is_enabled).
-    if status != "blocked" && status != "done" {
+    // that notify.
+    if !status_is_enabled(&status) {
         return Ok(None);
     }
 

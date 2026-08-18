@@ -2,6 +2,25 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Bind the terminal to each Herdr workspace from `pane.focused` events, replacing the bundled terminal whitelist: any terminal (or IDE with an integrated terminal) is now learned automatically and per-workspace, so switching terminals follows you across workspaces.
+- Prune terminal bindings for workspaces that no longer exist (checked against `herdr pane list` during cleanup), so the memory file stays bounded.
+
+### Changed
+
+- Remove the hardcoded terminal bundle-id whitelist (`is_known_terminal_bundle`); terminal recognition now relies entirely on the per-workspace binding learned at focus time.
+- Remove all configuration: no `.env` file, no `HERDR_FOCUS_NOTIFY_*` variables. `blocked`/`done` notification, the 3600-second auto-dismiss timeout, alerting via `alerter` (auto-detected from `PATH` and common Homebrew paths), and per-workspace terminal activation are all built-in defaults. `HERDR_BIN_PATH` and `HERDR_PLUGIN_STATE_DIR` remain as environment hooks for tests and unusual installs.
+
+- Zero-configuration terminal detection: the plugin now learns the terminal Herdr runs in from `pane.focused` events (restricted to a whitelist of known terminals and IDEs) and uses it to activate the terminal on click and to skip notifications for panes you are already looking at.
+- `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` accepts a comma-separated list, and each entry may be an app name, an absolute `.app` path (with `~/` expansion), or a bundle id (`open -b`).
+
+### Changed
+
+- Skip detection no longer requires `ACTIVATE_APP`: a focused pane is skipped when the frontmost app is a known terminal or an explicitly configured/learned one. Any other or unknown frontmost app still notifies, preserving the conservative default.
+
 ## [0.3.11] - 2026-08-15
 
 ### Added

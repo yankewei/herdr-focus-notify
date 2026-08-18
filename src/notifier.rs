@@ -2,22 +2,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::executable::{executable_in_path, find_executable, home_dir, is_executable_file};
+use crate::executable::{find_executable, home_dir};
 use crate::util::{notification_group_id, shell_quote};
 
 pub(crate) fn resolve_notifier_bin() -> Result<String, String> {
-    if let Some(configured) = crate::config::config_var("HERDR_FOCUS_NOTIFY_NOTIFIER") {
-        if is_executable_file(Path::new(&configured)) || executable_in_path(&configured).is_some() {
-            return Ok(configured);
-        }
-
-        return Err(format!(
-            "configured notifier is not executable: {configured}; install alerter with `brew install vjeantet/tap/alerter`"
-        ));
-    }
-
     find_executable("alerter", alerter_candidate_paths()).ok_or_else(|| {
-        "no alerter notifier found; install alerter with `brew install vjeantet/tap/alerter` or set HERDR_FOCUS_NOTIFY_NOTIFIER".to_string()
+        "no alerter notifier found; install alerter with `brew install vjeantet/tap/alerter`".to_string()
     })
 }
 

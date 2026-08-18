@@ -35,70 +35,52 @@ cargo build --release
 herdr plugin link .
 ```
 
-### 3. Configure your terminal app
+### 3. Done — zero configuration
 
-Find the plugin configuration directory:
+The plugin works with **zero configuration**. The first time you focus a pane in Herdr, the plugin binds the frontmost terminal to that pane's workspace, then uses it to activate the terminal on click and to recognise when you are already looking at a pane. Bindings are per-workspace: switch from kitty to Ghostty and keep working on the same pane, and clicking a notification activates Ghostty.
+
+No configuration files needed. The only external dependency is alerter, auto-detected from `PATH` and common Homebrew locations:
 
 ```bash
-herdr plugin config-dir herdr-focus-notify
+brew install vjeantet/tap/alerter
 ```
-
-Create a `.env` file there. This is the recommended minimal setup:
-
-```env
-HERDR_FOCUS_NOTIFY_ACTIVATE_APP=kitty
-```
-
-Use your terminal app's name, such as `kitty`, or an absolute `.app` path, such as `/Applications/kitty.app`.
-
-This lets the plugin activate the terminal when you click a notification and reliably recognise when you have seen the relevant pane.
-
-The notifier path is usually found automatically. Set `HERDR_FOCUS_NOTIFY_NOTIFIER` only when auto-detection fails.
 
 ## How notifications behave
 
-By default, `blocked` and `done` status changes can produce a notification. With a valid `ACTIVATE_APP` configuration, the plugin sends one only when it cannot confirm that you are already looking at that pane.
+By default, `blocked` and `done` status changes can produce a notification. The plugin sends one only when it cannot confirm that you are already looking at that pane.
 
 | Your current view | Notification |
 |---|---|
 | Another app is frontmost | Sent |
 | Herdr is frontmost, but a different pane is focused | Sent |
 | Herdr is frontmost and the matching pane is focused | Skipped |
+| A known terminal is frontmost and the pane is focused | Skipped (you are looking at Herdr) |
 | The focused app cannot be determined | Sent, to avoid missing a change |
 
-Clicking a notification activates the configured terminal app, then runs `herdr agent focus <pane>`.
+Clicking a notification activates the terminal (configured, or the learned one), then runs `herdr agent focus <pane>`.
 
 Blocked notifications say that the agent needs your input and prompt you to review and respond. Done notifications say that the agent finished and prompt you to review the result. The plugin does not read or summarize pane contents.
 
-Without `ACTIVATE_APP`, focusing still works, but the plugin cannot reliably detect that you have already seen a pane. It may therefore send extra notifications.
-
-When you manually focus the matching pane in Herdr while the configured terminal is frontmost, its pending notification is removed.
+When you manually focus the matching pane in Herdr while its terminal is frontmost, its pending notification is removed.
 
 If the pane was already active when the notification arrived, returning to that terminal removes it within a few seconds.
 
-## Optional settings
+## How it stays quiet
 
-There are six supported settings, but you normally need only `HERDR_FOCUS_NOTIFY_ACTIVATE_APP`. Everything else has a working default.
+- Notifications only fire for `blocked` and `done` — the two statuses that actually need you.
+- A notification is skipped when the pane is already focused **and** the frontmost app is the terminal bound to its workspace (learned automatically).
+- If you are elsewhere when the pane becomes active, the notification auto-removes within a few seconds once you switch back to the bound terminal.
 
-- `HERDR_FOCUS_NOTIFY_STATUSES`: comma-separated subset of the notifiable statuses (`blocked`, `done`); default `blocked,done`. Other statuses (e.g. `running`) never notify, because they need no user action.
-- `HERDR_FOCUS_NOTIFY_TIMEOUT`: auto-dismiss time in seconds; default `3600`, or `0` to keep notifications open.
-- `HERDR_FOCUS_NOTIFY_ENABLED=0`: pause notifications without removing the plugin.
-- `HERDR_FOCUS_NOTIFY_NOTIFIER`: full `alerter` path when auto-detection fails.
-- `HERDR_FOCUS_NOTIFY_DEBUG=1`: enable diagnostics in the plugin logs and `focus-click.log`.
-
-The `--test` action caps the test notification timeout at 10 seconds so a test run does not block for the normal 3600-second default.
-
-The `.env` file supports `KEY=value`, optional `export KEY=value`, quoted values, and inline comments. Paths in `ACTIVATE_APP` are passed directly to `open`; use an absolute path rather than `~`.
+The `--test` action sends a real test notification (capped at 10 seconds) so you can verify the whole pipeline.
 
 ## Troubleshooting
 
 | Problem | What to check |
 |---|---|
-| No notification appears | Confirm `alerter` is installed and executable. Set `HERDR_FOCUS_NOTIFY_NOTIFIER` to its full path if needed. |
-| Click does not bring forward the expected terminal | Set `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` to the app name or its absolute `.app` path. |
-| Notifications appear while you are viewing Herdr | Configure `ACTIVATE_APP`; without it the plugin deliberately errs on the side of notifying you. |
-| Need diagnostic information | Temporarily set `HERDR_FOCUS_NOTIFY_DEBUG=1`, then inspect the plugin logs and `focus-click.log`. |
-| Need to pause notifications | Set `HERDR_FOCUS_NOTIFY_ENABLED=0`. |
+| No notification appears | Make sure `alerter` is installed and executable; it is auto-detected from `PATH` and common Homebrew locations (`brew install vjeantet/tap/alerter`). |
+| Click does not bring forward the expected terminal | Focus any pane once in Herdr first — the plugin learns your terminal from that moment, per workspace. |
+| Notifications appear while you are viewing Herdr | You were not in the workspace's bound terminal at that moment; the plugin errs on the side of notifying rather than missing a state change. |
+| Need diagnostic information | Run the plugin with `--test` or `--check-pane-visibility <pane_id>` to exercise the pipeline and focus checks directly. |
 
 ## Bundled icons
 

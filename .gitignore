@@ -1,3 +1,7 @@
 /target/
 /.DS_Store
 
+.alma-snapshots
+
+# herdr runtime scratch data
+/.nodeterm/

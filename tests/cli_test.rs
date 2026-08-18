@@ -27,35 +27,20 @@ fn help_and_version_print_to_stdout() {
 }
 
 #[test]
-fn no_event_is_quiet_even_when_notifier_config_is_bad() {
-    let output = binary()
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", "/definitely/missing")
-        .output()
-        .unwrap();
+fn no_event_is_quiet_without_any_output() {
+    let output = binary().output().unwrap();
 
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
 
-#[test]
-fn test_mode_reports_bad_notifier() {
-    let output = binary()
-        .arg("--test")
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", "/definitely/missing")
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("configured notifier"));
-}
 
 #[test]
 fn test_mode_reports_bad_configured_herdr_binary() {
     let output = binary()
         .arg("--test")
         .env("HERDR_BIN_PATH", "/definitely/missing-herdr")
-        .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
         .output()
         .unwrap();
 
@@ -63,56 +48,8 @@ fn test_mode_reports_bad_configured_herdr_binary() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("configured Herdr binary"));
 }
 
-#[test]
-fn disabled_test_mode_is_quiet_even_when_notifier_config_is_bad() {
-    let output = binary()
-        .arg("--test")
-        .env("HERDR_FOCUS_NOTIFY_ENABLED", "0")
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", "/definitely/missing")
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
-}
 
 #[cfg(unix)]
-#[test]
-fn focus_event_without_notifier_leaves_no_cleared_marker() {
-    let temp_dir = temp_test_dir();
-
-    // Both bundle-ID queries answer with the configured app, so the
-    // notification would normally be marked as cleared.
-    let osascript = temp_dir.join("osascript");
-    write_executable(
-        &osascript,
-        "#!/bin/sh\nprintf '%s\\n' 'com.example.terminal'\n",
-    );
-
-    let state_dir = temp_dir.join("state");
-    let path = path_with_temp_dir(&temp_dir);
-    let output = binary()
-        .env("HERDR_PLUGIN_EVENT", "pane.focused")
-        .env(
-            "HERDR_PLUGIN_EVENT_JSON",
-            r#"{"event":"pane.focused","data":{"pane_id":"w1:p2"}}"#,
-        )
-        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", "/definitely/missing")
-        .env("HERDR_PLUGIN_STATE_DIR", &state_dir)
-        .env("PATH", path)
-        .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
-        .output()
-        .unwrap();
-
-    // The notifier failure must surface, but it must not leave a stale
-    // cleared marker behind for the focused pane.
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("configured notifier"));
-    assert!(!state_dir.join("herdr-w1-p2.cleared").exists());
-    fs::remove_dir_all(temp_dir).unwrap();
-}
 
 #[cfg(unix)]
 #[test]
@@ -139,12 +76,9 @@ fn focus_event_removes_notification_for_foreground_terminal() {
             "HERDR_PLUGIN_EVENT_JSON",
             r#"{"event":"pane.focused","data":{"pane_id":"w1:p2"}}"#,
         )
-        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
         .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
         .env("NOTIFIER_LOG", &notifier_log)
         .env("PATH", path)
-        .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
         .output()
         .unwrap();
 
@@ -162,7 +96,7 @@ fn visible_focused_pane_removes_its_pending_notification() {
     let temp_dir = temp_test_dir();
 
     let frontmost_state = temp_dir.join("frontmost-bundle-id");
-    fs::write(&frontmost_state, "com.example.other\n").unwrap();
+
 
     let osascript = temp_dir.join("osascript");
     write_executable(
@@ -185,11 +119,30 @@ fn visible_focused_pane_removes_its_pending_notification() {
     let notifier_log = temp_dir.join("notifier.log");
     let remove_signal = temp_dir.join("removed");
     let path = path_with_temp_dir(&temp_dir);
+
+    // Zero configuration: establish the w1 binding first via a real
+    // pane.focused event while the fake frontmost app is the terminal.
+    fs::write(&frontmost_state, "com.example.terminal\n").unwrap();
+    let learn = binary()
+        .env("HERDR_PLUGIN_EVENT", "pane.focused")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"pane.focused","data":{"pane_id":"w1:p2"}}"#,
+        )
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("FRONTMOST_STATE", &frontmost_state)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(learn.status.success());
+
+    // Now the user is elsewhere; the pending notification should auto-remove
+    // once they switch back to the bound terminal.
+    fs::write(&frontmost_state, "com.example.other\n").unwrap();
+
     let child = binary()
         .arg("--test")
         .env("HERDR_BIN_PATH", &herdr)
-        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
         .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
         .env("FRONTMOST_STATE", &frontmost_state)
         .env("NOTIFIER_LOG", &notifier_log)
@@ -245,10 +198,7 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
         .arg("--test")
         // A filter that excludes the hardcoded test status must not suppress
         // a test notification either.
-        .env("HERDR_FOCUS_NOTIFY_STATUSES", "done")
         .env("HERDR_BIN_PATH", &herdr)
-        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
         .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
         .env("NOTIFIER_LOG", &notifier_log)
         .env("PATH", path)
@@ -289,12 +239,10 @@ fn normal_notification_uses_status_specific_copy_without_requesting_an_explanati
             r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"blocked","agent":"Codex","title":"Implement plugin"}}"#,
         )
         .env("HERDR_BIN_PATH", &herdr)
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
         .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
         .env("NOTIFIER_LOG", &notifier_log)
         .env("HERDR_LOG", &herdr_log)
         .env("PATH", path)
-        .env_remove("HERDR_FOCUS_NOTIFY_ENABLED")
         .output()
         .unwrap();
 
@@ -357,8 +305,6 @@ fn unfocused_pane_does_not_start_a_visibility_monitor() {
             r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"done"}}"#,
         )
         .env("HERDR_BIN_PATH", &herdr)
-        .env("HERDR_FOCUS_NOTIFY_ACTIVATE_APP", "Test Terminal")
-        .env("HERDR_FOCUS_NOTIFY_NOTIFIER", &notifier)
         .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
         .env("FRONTMOST_STATE", &frontmost_state)
         .env("FOCUSED_PANE_STATE", &focused_pane_state)

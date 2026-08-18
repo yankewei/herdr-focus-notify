@@ -45,7 +45,8 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
    - `--help` and `--version` print to stdout before plugin setup.
 3. **Notification decision**:
    - Only `blocked` and `done` statuses can produce notifications (they are the ones that need user action); `HERDR_FOCUS_NOTIFY_STATUSES` can only narrow that set, never extend it.
-   - The notification is skipped if the target pane is already focused **and** the frontmost macOS application belongs to the same bundle ID as the configured `ACTIVATE_APP` (see `should_skip_from_focus_and_bundles`). If either check fails, the plugin sends the notification to avoid missing a state change.
+   - The notification is skipped when the target pane is already focused **and** the frontmost macOS application is one of the effective terminal bundle IDs (`effective_terminal_bundle_ids()`: explicit `ACTIVATE_APP` targets first, then the terminal bound to the pane's workspace). Any other or unknown frontmost app sends the notification to avoid missing a state change; when a terminal is known, the send becomes a visibility-monitored send that auto-dismisses once the pane is seen.
+   - `pane.focused` events bind the frontmost terminal to the pane's workspace (`learn_terminal_from_frontmost`), so the plugin works with zero configuration; this is what makes `ACTIVATE_APP` optional.
    - Recognized agent names are matched to bundled local PNG icons and passed to `alerter` with `--app-icon`.
    - Notification titles and bodies use short status-specific copy: blocked agents ask the user to review and respond, while done agents ask the user to review the result. The plugin does not read or summarize pane contents.
 4. **Binary resolution**:
@@ -56,7 +57,7 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
    - The script name is a hash of the pane ID, so repeated events for one pane reuse the same script path. Old generated scripts and crashed notifier temp files are cleaned up opportunistically.
    - The script is made executable with mode `0o700`.
 6. **Notification delivery**:
-   - Normal plugin events spawn the script detached via `nohup sh ... &`. The script itself calls `alerter`, then runs `herdr agent focus <pane>` if the user clicks the notification.
+   - Normal plugin events spawn the script detached via `nohup sh ... &`. The script itself calls `alerter`, then activates the terminal (configured via `ACTIVATE_APP`, or `open -b <learned bundle id>` when unconfigured) and runs `herdr agent focus <pane>` if the user clicks the notification.
    - `--test` runs the generated script in the foreground so notifier failures surface through stderr and a non-zero exit code.
 
 ## Configuration
@@ -70,11 +71,11 @@ Key variables observed in code:
 | `HERDR_FOCUS_NOTIFY_ENABLED` | `0`/`false`/`no`/`off` disables the plugin. |
 | `HERDR_FOCUS_NOTIFY_STATUSES` | Comma-separated subset of `blocked,done` that triggers notifications. Default: `blocked,done`. |
 | `HERDR_FOCUS_NOTIFY_NOTIFIER` | Path to the notifier backend. Defaults to auto-detected `alerter`. |
-| `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` | Terminal app name (e.g. `kitty`) or `.app` path (e.g. `/Applications/kitty.app`) to activate on click and to resolve a bundle ID for skip detection. |
+| `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` | Optional explicit terminal override: comma-separated list of app names, `.app` paths (with `~/` expansion), or bundle IDs. Activates on click and contributes bundle IDs to skip detection. When unset, the terminal learned from `pane.focused` events is used instead. |
 | `HERDR_FOCUS_NOTIFY_TIMEOUT` | Alerter auto-dismiss timeout in seconds; `0` disables auto-dismiss. Default: `3600`. |
 | `HERDR_FOCUS_NOTIFY_DEBUG` | `1`/`true`/`yes`/`on` enables stderr diagnostics and a `focus-click.log` in the state directory. |
 
-Important: `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` values containing `/` are passed to `open` directly; values without `/` are passed to `open -a`. Paths are **not shell-expanded**, so `~` is treated literally.
+Important: `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` entries are parsed into three forms — app name (`open -a`), absolute `.app` path with `~/` expansion (`open <path>`), or bundle id (`open -b`). A comma-separated list is allowed; the first usable entry wins for activation, all of them count for skip detection.
 
 Bundled agent icons are extracted from `@lobehub/icons-static-png` (except `omp.png` and `pi.png`, which use the official Oh My Pi and Pi logos) and attributed in `assets/icons/NOTICE.md`.
 
@@ -98,7 +99,7 @@ Bundled agent icons are extracted from `@lobehub/icons-static-png` (except `omp.
 
 - **macOS only**: The plugin manifest declares `platforms = ["macos"]`. The binary uses AppleScript (`osascript`) and macOS-specific app/bundle APIs; it will not behave correctly on other platforms.
 - **No-event quiet path**: A normal plugin invocation without `HERDR_PLUGIN_EVENT_JSON` exits quietly with `0`. Real configuration, parsing, script, and notifier errors should surface through stderr and non-zero exit codes.
-- **Skip logic is conservative**: A notification is only suppressed when the plugin can *confirm* the pane is focused and the frontmost app matches. Any ambiguity (missing bundle ID, AppleScript failure, missing `ACTIVATE_APP`) results in a notification being sent.
+- **Skip logic is conservative**: A notification is only suppressed when the plugin can *confirm* the pane is focused and the frontmost app is a terminal (the workspace's learned binding, or explicit `ACTIVATE_APP`). Any ambiguity (AppleScript failure, unknown frontmost app) results in a notification being sent. The learned-terminal file lives in the state directory as `terminal-memory.json` and is deliberately excluded from the stale-file sweep.
 - **State directory hygiene**: Generated scripts are keyed by a hash of the pane ID, so repeated events for one pane reuse the same script path. A retention sweep removes stale generated scripts (30 days), crashed notifier temp files (24 hours), and `.cleared` focus markers (24 hours); it runs on `--cleanup` (including the Herdr startup hook) and opportunistically before each notification.
 - **`herdr-plugin.toml` is the source of truth for execution**: Herdr invokes `target/release/herdr-focus-notify` directly for events and actions, not `cargo run`. The binary must be built before the plugin action/event works.
 - **Env file parsing is custom**: `parse_env_file()` supports `KEY=value`, optional `export KEY=value`, quoted values, double-quoted escapes for common whitespace characters, and unquoted inline comments. It does not support variable interpolation.

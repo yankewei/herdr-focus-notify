@@ -1,10 +1,9 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::config::config_var;
 
 pub(crate) fn resolve_herdr_bin() -> Result<String, String> {
-    if let Some(configured) = config_var("HERDR_BIN_PATH") {
+    if let Ok(configured) = env::var("HERDR_BIN_PATH") {
         if is_executable_file(Path::new(&configured)) || executable_in_path(&configured).is_some() {
             return Ok(configured);
         }

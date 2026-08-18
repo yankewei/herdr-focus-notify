@@ -1,5 +1,4 @@
 mod cli;
-mod config;
 mod event;
 mod executable;
 mod focus;
@@ -14,16 +13,15 @@ use std::env;
 use std::process::ExitCode;
 
 use cli::{parse_cli_args, print_usage, CliAction};
-use config::{is_enabled, status_is_enabled};
-use event::{focused_pane_id_from_event_json, notification_from_event_json};
+use event::{focused_pane_id_from_event_json, notification_from_event_json, status_is_enabled};
 use executable::resolve_herdr_bin;
 use focus::{
-    notification_decision, should_clear_notification_on_focus, test_notification,
-    NotificationDecision,
+    learn_terminal_from_frontmost, notification_decision, should_clear_notification_on_focus,
+    test_notification, NotificationDecision,
 };
 use notifier::{remove_notification, resolve_notifier_bin, send_notification};
 use script::write_focus_script;
-use state::{cleanup_stale_state_files, mark_notification_cleared, reset_notification_clearance};
+use state::{cleanup_stale_state_files, mark_notification_cleared, prune_stale_workspace_bindings, reset_notification_clearance};
 
 fn main() -> ExitCode {
     match run() {
@@ -50,6 +48,11 @@ fn run() -> Result<(), String> {
         CliAction::Cleanup => {
             cleanup_stale_state_files()
                 .map_err(|err| format!("failed to clean stale state files: {err}"))?;
+            // Terminal bindings for workspaces that no longer exist are stale
+            // too; best-effort, since Herdr may not be reachable.
+            if let Ok(herdr_bin) = resolve_herdr_bin() {
+                let _ = prune_stale_workspace_bindings(&herdr_bin);
+            }
             return Ok(());
         }
         CliAction::CheckPaneVisibility(pane_id) => {
@@ -59,10 +62,6 @@ fn run() -> Result<(), String> {
                 .ok_or_else(|| "pane is not visible in the configured app".to_string());
         }
         CliAction::Event | CliAction::Test => {}
-    }
-
-    if !is_enabled() {
-        return Ok(());
     }
 
     let herdr_bin = resolve_herdr_bin()?;
@@ -80,7 +79,17 @@ fn run() -> Result<(), String> {
                     return Ok(());
                 };
 
-                if should_clear_notification_on_focus() {
+                // Zero-configuration terminal detection: bind the frontmost
+                // app to this pane's workspace, so future clicks can activate
+                // it and skip checks can match it. Trusted without a whitelist
+                // because a genuine pane.focused only fires while the user is
+                // inside Herdr; a click-spawned focus (frontmost = browser)
+                // gets corrected by the next genuine focus. Best-effort, so
+                // it never hijacks the pane.focused handling.
+                let workspace = util::workspace_id_from_pane_id(&pane_id).unwrap_or("default");
+                learn_terminal_from_frontmost(workspace);
+
+                if should_clear_notification_on_focus(workspace) {
                     let notifier_bin = resolve_notifier_bin()?;
                     mark_notification_cleared(&pane_id)
                         .map_err(|err| format!("failed to mark notification as cleared: {err}"))?;

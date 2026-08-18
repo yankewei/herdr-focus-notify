@@ -5,10 +5,14 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::config::{activate_app, alerter_timeout_secs, is_debug_enabled};
+use crate::focus::effective_terminal_bundle_ids;
 use crate::notification::FocusNotification;
-use crate::state::{cleanup_stale_state_files, cleared_notification_marker_path, plugin_state_dir};
+use crate::state::{cleanup_stale_state_files, cleared_notification_marker_path, plugin_state_dir, prune_stale_workspace_bindings};
 use crate::util::shell_quote;
+
+/// How long an unclicked notification stays up (seconds) before alerter
+/// auto-dismisses it; 0 would keep it forever.
+const ALERTER_TIMEOUT_SECS: u64 = 3600;
 
 pub(crate) fn write_focus_script(
     notification: &FocusNotification,
@@ -22,18 +26,18 @@ pub(crate) fn write_focus_script(
     // State cleanup is maintenance work; a stale file must not prevent a new
     // notification from being delivered.
     let _ = cleanup_stale_state_files();
+    let _ = prune_stale_workspace_bindings(herdr_bin);
 
     let timeout_secs = if test_mode {
-        test_timeout_secs(alerter_timeout_secs())
+        test_timeout_secs(ALERTER_TIMEOUT_SECS)
     } else {
-        alerter_timeout_secs()
+        ALERTER_TIMEOUT_SECS
     };
 
     let mut hasher = DefaultHasher::new();
     notification.pane_id.hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
-    let debug_log_path = is_debug_enabled().then(|| state_dir.join("focus-click.log"));
     let executable_path = monitor_visibility
         .then(|| env::current_exe().ok())
         .flatten();
@@ -43,7 +47,6 @@ pub(crate) fn write_focus_script(
         notifier_bin,
         timeout_secs,
         executable_path.as_deref(),
-        debug_log_path.as_deref(),
     );
 
     fs::write(&script_path, script)?;
@@ -58,19 +61,23 @@ fn focus_script_content_with_timeout(
     notifier_bin: &str,
     timeout_secs: u64,
     executable_path: Option<&Path>,
-    debug_log_path: Option<&Path>,
 ) -> String {
+    let workspace = crate::util::workspace_id_from_pane_id(&notification.pane_id).unwrap_or("default");
+    // The visibility monitor needs a terminal it can match the frontmost app
+    // against; with none configured or learned, deliver a plain notification.
+    let visibility_check_binary = if effective_terminal_bundle_ids(workspace).is_empty() {
+        None
+    } else {
+        executable_path
+    };
+
     alerter_focus_script(
         notification,
         herdr_bin,
         notifier_bin,
         timeout_secs,
-        activation_command().as_deref(),
-        activate_app()
-            .is_some()
-            .then_some(executable_path)
-            .flatten(),
-        debug_log_path,
+        activation_command(workspace).as_deref(),
+        visibility_check_binary,
     )
 }
 
@@ -89,7 +96,6 @@ fn alerter_focus_script(
     timeout_secs: u64,
     activate_command: Option<&str>,
     visibility_check_binary: Option<&Path>,
-    debug_log_path: Option<&Path>,
 ) -> String {
     let title_q = shell_quote(&notification.title);
     let body_q = shell_quote(&notification.body);
@@ -153,71 +159,35 @@ fn alerter_focus_script(
     }
     script.push_str("notifier_status=$(cat \"$status_path\" 2>/dev/null || printf '1')\nresult=$(cat \"$result_path\")\nrm -f \"$result_path\" \"$status_path\"\n");
 
-    match debug_log_path {
-        Some(log_path) => {
-            let log_q = shell_quote(log_path.to_string_lossy().as_ref());
-            script.push_str(&format!(
-                "printf '%s alerter status=%s result=%s\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$notifier_status\" \"$result\" >> {log} 2>&1\n",
-                log = log_q,
-            ));
-            script.push_str("if [ \"$notifier_status\" -ne 0 ]; then\n");
-            script.push_str("    exit \"$notifier_status\"\n");
-            script.push_str("fi\n");
-            script.push_str("status=0\n");
-            script.push_str("case \"$result\" in\n");
-            script.push_str(&format!(
-                "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n{activate}    {herdr} agent focus {pane} >> {log} 2>&1\n    status=$?\n    printf '%s focus exited %s\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$status\" >> {log} 2>&1\n    ;;\n",
-                activate = activation_script(activate_command, Some(log_q.as_str())),
-                herdr = herdr_q,
-                pane = pane_q,
-                log = log_q,
-            ));
-            script.push_str("esac\n");
-            script.push_str("exit \"$status\"\n");
-        }
-        None => {
-            script.push_str("if [ \"$notifier_status\" -ne 0 ]; then\n");
-            script.push_str("    exit \"$notifier_status\"\n");
-            script.push_str("fi\n");
-            script.push_str("case \"$result\" in\n");
-            script.push_str(&format!(
-                "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n{activate}    exec {herdr} agent focus {pane}\n    ;;\n",
-                activate = activation_script(activate_command, None),
-                herdr = herdr_q,
-                pane = pane_q,
-            ));
-            script.push_str("esac\n");
-        }
-    }
+    script.push_str("if [ \"$notifier_status\" -ne 0 ]; then\n");
+    script.push_str("    exit \"$notifier_status\"\n");
+    script.push_str("fi\n");
+    script.push_str("case \"$result\" in\n");
+    script.push_str(&format!(
+        "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n{activate}    exec {herdr} agent focus {pane}\n    ;;\n",
+        activate = activation_script(activate_command),
+        herdr = herdr_q,
+        pane = pane_q,
+    ));
+    script.push_str("esac\n");
 
     script
 }
 
-fn activation_script(activate_command: Option<&str>, log_q: Option<&str>) -> String {
+fn activation_script(activate_command: Option<&str>) -> String {
     let Some(command) = activate_command else {
         return String::new();
     };
-
-    match log_q {
-        Some(log_q) => format!(
-            "    {command} >> {log} 2>&1\n    activate_status=$?\n    printf '%s activate exited %s\\n' \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\" \"$activate_status\" >> {log} 2>&1\n",
-            command = command,
-            log = log_q,
-        ),
-        None => format!("    {command} >/dev/null 2>&1\n", command = command),
-    }
+    format!("    {command} >/dev/null 2>&1\n", command = command)
 }
 
-fn activation_command() -> Option<String> {
-    activate_app().map(activation_command_from)
-}
-
-fn activation_command_from(app: String) -> String {
-    if app.contains('/') {
-        format!("open {}", shell_quote(&app))
-    } else {
-        format!("open -a {}", shell_quote(&app))
-    }
+/// The command that brings the terminal/Herdr host app to the front before
+/// focusing the agent pane: whichever terminal is bound to the pane's
+/// workspace, learned from `pane.focused` events. Zero configuration, and it
+/// follows the user across terminals per-workspace.
+fn activation_command(workspace: &str) -> Option<String> {
+    crate::state::remembered_terminal(workspace)
+        .map(|bound| format!("open -b {}", shell_quote(&bound)))
 }
 
 #[cfg(unix)]
@@ -249,31 +219,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn focus_script_can_include_debug_click_log() {
-        let notification = FocusNotification {
-            pane_id: "pane ' one".to_string(),
-            status: "blocked".to_string(),
-            title: "x".to_string(),
-            body: "y".to_string(),
-            group: "g".to_string(),
-            app_icon: None,
-        };
-        let script = focus_script_content_with_timeout(
-            &notification,
-            "/tmp/herdr bin",
-            "/opt/homebrew/bin/alerter",
-            alerter_timeout_secs(),
-            None,
-            Some(Path::new("/tmp/focus clicks.log")),
-        );
-
-        assert!(script.contains("alerter status=%s result=%s"));
-        assert!(script.contains(">> '/tmp/focus clicks.log' 2>&1"));
-        assert!(script.contains("'/tmp/herdr bin' agent focus 'pane '\\'' one'"));
-        assert!(script.contains("focus exited %s"));
-        assert!(script.contains("exit \"$status\""));
-    }
 
     #[test]
     fn alerter_script_invokes_alerter_and_runs_focus_on_click() {
@@ -281,8 +226,7 @@ mod tests {
             &sample_notification(),
             "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
-            alerter_timeout_secs(),
-            None,
+            ALERTER_TIMEOUT_SECS,
             None,
         );
 
@@ -313,7 +257,6 @@ mod tests {
             120,
             None,
             None,
-            None,
         );
 
         assert!(script.contains("--timeout 120"));
@@ -328,7 +271,6 @@ mod tests {
             0,
             None,
             None,
-            None,
         );
 
         assert!(!script.contains("--timeout"));
@@ -341,26 +283,6 @@ mod tests {
         assert_eq!(test_timeout_secs(5), 5);
     }
 
-    #[test]
-    fn alerter_debug_script_logs_result() {
-        let script = alerter_focus_script(
-            &sample_notification(),
-            "/usr/local/bin/herdr",
-            "/opt/homebrew/bin/alerter",
-            1800,
-            None,
-            None,
-            Some(Path::new("/tmp/click.log")),
-        );
-
-        assert!(script.contains("alerter status=%s result=%s"));
-        assert!(script.contains(">> '/tmp/click.log' 2>&1"));
-        assert!(script.contains("notifier_status=$(cat \"$status_path\""));
-        assert!(script.contains("status=0\n"));
-        assert!(script.contains("focus exited %s"));
-        assert!(script.contains("Focus|@ACTIONCLICKED|@CONTENTCLICKED)"));
-        assert!(!script.contains("content click ignored"));
-    }
 
     #[test]
     fn alerter_script_includes_activation_when_configured() {
@@ -370,7 +292,6 @@ mod tests {
             "/opt/homebrew/bin/alerter",
             3600,
             Some("open -a 'kitty'"),
-            None,
             None,
         );
 
@@ -387,7 +308,6 @@ mod tests {
             3600,
             Some("open -a 'kitty'"),
             Some(Path::new("/tmp/herdr-focus-notify")),
-            None,
         );
 
         assert!(script.contains("notifier_pid=$!"));
@@ -402,15 +322,4 @@ mod tests {
         assert!(script.contains("kill \"$monitor_pid\" 2>/dev/null"));
     }
 
-    #[test]
-    fn activation_command_opens_app_names_and_paths() {
-        assert_eq!(
-            activation_command_from("kitty".to_string()),
-            "open -a 'kitty'".to_string()
-        );
-        assert_eq!(
-            activation_command_from("/Applications/kitty.app".to_string()),
-            "open '/Applications/kitty.app'".to_string()
-        );
-    }
 }
