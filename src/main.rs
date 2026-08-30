@@ -63,7 +63,7 @@ fn run() -> Result<(), String> {
             if notification_decision(&pane_id, &herdr_bin) == NotificationDecision::Skip {
                 return Ok(());
             }
-            return Err("pane is not visible in the configured app".to_string());
+            return Err("pane is not visible in its workspace's bound terminal".to_string());
         }
         CliAction::Event | CliAction::Test => {}
     }

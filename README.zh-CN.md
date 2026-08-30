@@ -54,7 +54,7 @@ brew install vjeantet/tap/alerter
 | 其它 App 在前台 | 发送 |
 | Herdr 在前台，但焦点位于另一个 pane | 发送 |
 | Herdr 在前台，且焦点就是对应 pane | 跳过 |
-| 已知终端在前台，且焦点就是对应 pane | 跳过（你正在看 Herdr） |
+| 该 workspace 绑定的终端在前台，且焦点就是对应 pane | 跳过（你正在看 Herdr） |
 | 无法确定前台 App | 发送，避免遗漏状态变化 |
 
 点击通知后,插件会激活该 pane 所在 workspace 绑定的终端,然后执行 `herdr agent focus <pane>`。

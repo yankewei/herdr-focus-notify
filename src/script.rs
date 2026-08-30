@@ -69,7 +69,7 @@ fn focus_script_content_with_timeout(
     let workspace =
         crate::util::workspace_id_from_pane_id(&notification.pane_id).unwrap_or("default");
     // The visibility monitor needs a terminal it can match the frontmost app
-    // against; with none configured or learned, deliver a plain notification.
+    // against; with none learned, deliver a plain notification.
     let visibility_check_binary = if remembered_terminal(workspace).is_none() {
         None
     } else {

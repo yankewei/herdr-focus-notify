@@ -54,10 +54,10 @@ By default, `blocked` and `done` status changes can produce a notification. The 
 | Another app is frontmost | Sent |
 | Herdr is frontmost, but a different pane is focused | Sent |
 | Herdr is frontmost and the matching pane is focused | Skipped |
-| A known terminal is frontmost and the pane is focused | Skipped (you are looking at Herdr) |
+| The terminal bound to the pane's workspace is frontmost and the pane is focused | Skipped (you are looking at Herdr) |
 | The focused app cannot be determined | Sent, to avoid missing a change |
 
-Clicking a notification activates the terminal (configured, or the learned one), then runs `herdr agent focus <pane>`.
+Clicking a notification activates the terminal bound to the pane's workspace, then runs `herdr agent focus <pane>`.
 
 Blocked notifications say that the agent needs your input and prompt you to review and respond. Done notifications say that the agent finished and prompt you to review the result. The plugin does not read or summarize pane contents.
 

@@ -17,7 +17,7 @@ pub(crate) fn plugin_state_dir() -> PathBuf {
 
 /// The most recently used terminal (learned from `pane.focused` events) is
 /// persisted here so a click can activate it and skip checks can match it,
-/// without requiring any `HERDR_FOCUS_NOTIFY_ACTIVATE_APP` configuration.
+/// with no configuration required.
 pub(crate) fn remember_terminal(workspace: &str, bundle_id: &str) -> io::Result<()> {
     let state_dir = plugin_state_dir();
     fs::create_dir_all(&state_dir)?;
