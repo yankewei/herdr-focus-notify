@@ -328,15 +328,17 @@ fn unfocused_pane_does_not_start_a_visibility_monitor() {
 
 #[cfg(unix)]
 fn temp_test_dir() -> PathBuf {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-focus-notify-test-{}-{}",
+        "herdr-focus-notify-test-{}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    fs::create_dir_all(&temp_dir).unwrap();
+    fs::create_dir(&temp_dir).unwrap();
     temp_dir
 }
 
