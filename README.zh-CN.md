@@ -6,6 +6,12 @@
 
 它只在状态变化容易被错过时提醒你：Herdr 不在前台，或你正在查看另一个 pane。
 
+## Herdr 版本兼容性
+
+**Herdr 0.9.0 请使用插件 tag `v0.5.0` 或更新版本**。`v0.4.0` 尚未适配客户端焦点变化，点击通知可能只激活终端而不切换到目标 pane。`v0.5.0` 在选中 agent 后增加了显式的标签页聚焦。
+
+最低支持的 Herdr 版本仍为 `0.7.5`。workspace 与终端的绑定行为保持不变。
+
 ## 快速开始
 
 ### 1. 安装前提条件
@@ -57,7 +63,7 @@ brew install vjeantet/tap/alerter
 | 该 workspace 绑定的终端在前台，且焦点就是对应 pane | 跳过（你正在看 Herdr） |
 | 无法确定前台 App | 发送，避免遗漏状态变化 |
 
-点击通知后,插件会激活该 pane 所在 workspace 绑定的终端,然后执行 `herdr agent focus <pane>`。
+点击通知后,插件会激活该 pane 所在 workspace 绑定的终端,然后执行 `herdr agent focus <pane>`,并使用返回的 tab ID 执行 `herdr tab focus <tab_id>`。后一步让 Herdr 0.9.0 客户端显示选中的 pane；多个客户端连接同一服务端时,会一起切换到该标签页。
 
 `blocked` 通知会提示 Agent 需要你的输入，并引导你查看和回复；`done` 通知会提示 Agent 已完成，并引导你查看结果。插件不会读取或总结 pane 内容。
 

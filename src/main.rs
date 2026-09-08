@@ -58,6 +58,9 @@ fn run() -> Result<(), String> {
             }
             return Ok(());
         }
+        CliAction::FocusPane(pane_id) => {
+            return focus::focus_pane(&pane_id, &resolve_herdr_bin()?);
+        }
         CliAction::CheckPaneVisibility(pane_id) => {
             let herdr_bin = resolve_herdr_bin()?;
             if notification_decision(&pane_id, &herdr_bin) == NotificationDecision::Skip {
@@ -111,7 +114,8 @@ fn run() -> Result<(), String> {
         CliAction::Help
         | CliAction::Version
         | CliAction::Cleanup
-        | CliAction::CheckPaneVisibility(_) => {
+        | CliAction::CheckPaneVisibility(_)
+        | CliAction::FocusPane(_) => {
             unreachable!("handled before notification setup")
         }
     };

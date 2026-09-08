@@ -56,7 +56,7 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
    - The script name is a hash of the pane ID, so repeated events for one pane reuse the same script path. Old generated scripts and crashed notifier temp files are cleaned up opportunistically.
    - The script is made executable with mode `0o700`.
 6. **Notification delivery**:
-   - Normal plugin events spawn the script detached via `nohup sh ... &`. The script itself calls `alerter`, then activates the terminal learned for the pane's workspace (`open -b <bound bundle id>`) and runs `herdr agent focus <pane>` if the user clicks the notification.
+   - Normal plugin events spawn the script detached via `nohup sh ... &`. The script itself calls `alerter`, then activates the terminal learned for the pane's workspace (`open -b <bound bundle id>`) and invokes the binary’s internal `--focus-pane` action if the user clicks the notification. It runs `herdr agent focus <pane>`, then `herdr tab focus <tab_id>` with the returned tab ID to synchronize Herdr 0.9.0 client views.
    - `--test` runs the generated script in the foreground so notifier failures surface through stderr and a non-zero exit code.
 
 ## Configuration

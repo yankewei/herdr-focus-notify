@@ -356,3 +356,127 @@ fn write_executable(path: &Path, content: &str) {
     permissions.set_mode(0o700);
     fs::set_permissions(path, permissions).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn focus_click_projects_the_selected_agents_actual_tab() {
+    let temp_dir = temp_test_dir();
+    let herdr = temp_dir.join("herdr");
+    let log = temp_dir.join("focus.log");
+    write_executable(
+        &herdr,
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$HERDR_LOG"
+if [ "$1 $2" = "agent focus" ]; then
+  printf '%s\n' '{"result":{"agent":{"pane_id":"w2:p7","tab_id":"w2:t3","focused":true}}}'
+elif [ "$1 $2 $3" != "tab focus w2:t3" ]; then
+  exit 1
+fi
+"#,
+    );
+    let output = binary()
+        .args(["--focus-pane", "w2:p7"])
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_LOG", &log)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(log).unwrap(),
+        "agent focus w2:p7\ntab focus w2:t3\n"
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn focus_click_reports_failures_without_guessing_a_tab() {
+    let temp_dir = temp_test_dir();
+    let herdr = temp_dir.join("herdr");
+    let log = temp_dir.join("focus.log");
+    for (response, exit_code, expected) in [
+        ("{}", 1, "failed to focus agent"),
+        ("not json", 0, "invalid agent focus json"),
+        (r#"{"result":{"agent":{}}}"#, 0, "missing tab_id"),
+    ] {
+        write_executable(&herdr, &format!("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$HERDR_LOG\"\nprintf '%s\\n' '{response}'\nexit {exit_code}\n"));
+        let output = binary()
+            .args(["--focus-pane", "w2:p7"])
+            .env("HERDR_BIN_PATH", &herdr)
+            .env("HERDR_LOG", &log)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+        assert_eq!(fs::read_to_string(&log).unwrap(), "agent focus w2:p7\n");
+    }
+    write_executable(
+        &herdr,
+        r#"#!/bin/sh
+if [ "$1" = "agent" ]; then
+  printf '%s\n' '{"result":{"agent":{"tab_id":"w2:t3"}}}'
+else
+  echo 'tab no longer exists' >&2
+  exit 1
+fi
+"#,
+    );
+    let output = binary()
+        .args(["--focus-pane", "w2:p7"])
+        .env("HERDR_BIN_PATH", &herdr)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("failed to focus tab: tab no longer exists"));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn notification_content_click_runs_the_focus_helper() {
+    let temp_dir = temp_test_dir();
+    let herdr = temp_dir.join("herdr");
+    let log = temp_dir.join("click.log");
+    write_executable(
+        &herdr,
+        r#"#!/bin/sh
+case "$1 $2" in
+  'pane list') echo '{"result":{"panes":[{"focused":true,"pane_id":"w2:p7"}]}}' ;;
+  'agent get') echo '{"result":{"agent":{"focused":false,"pane_id":"w2:p7"}}}' ;;
+  'agent focus')
+    printf '%s\n' "$*" >> "$HERDR_LOG"
+    echo '{"result":{"agent":{"pane_id":"w2:p7","tab_id":"w2:t3"}}}' ;;
+  'tab focus') printf '%s\n' "$*" >> "$HERDR_LOG" ;;
+  *) exit 1 ;;
+esac
+"#,
+    );
+    write_executable(
+        &temp_dir.join("alerter"),
+        "#!/bin/sh\necho '@CONTENTCLICKED'\n",
+    );
+    write_executable(&temp_dir.join("osascript"), "#!/bin/sh\nexit 1\n");
+    let output = binary()
+        .arg("--test")
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("HERDR_LOG", &log)
+        .env("PATH", path_with_temp_dir(&temp_dir))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(log).unwrap(),
+        "agent focus w2:p7\ntab focus w2:t3\n"
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
+}

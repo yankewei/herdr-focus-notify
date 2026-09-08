@@ -43,10 +43,43 @@ pub(crate) fn test_notification(herdr_bin: &str) -> FocusNotification {
         pane_id: pane_id.clone(),
         status: "blocked".to_string(),
         title: "Herdr Focus Notify test".to_string(),
-        body: format!("Click to run: {herdr_bin} agent focus {pane_id}"),
+        body: format!("Click to focus pane {pane_id}."),
         group: format!("herdr-{}", sanitize_group_id(&pane_id)),
         app_icon: None,
     }
+}
+
+/// Herdr 0.9.0 agent.focus selects the server pane without switching client
+/// tabs. Explicit tab.focus projects that selection into the attached clients.
+pub(crate) fn focus_pane(pane_id: &str, herdr_bin: &str) -> Result<(), String> {
+    let output = Command::new(herdr_bin)
+        .args(["agent", "focus", pane_id])
+        .output()
+        .map_err(|err| format!("failed to focus agent: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to focus agent: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|err| format!("invalid agent focus json: {err}"))?;
+    let tab_id = response
+        .pointer("/result/agent/tab_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("agent focus response is missing tab_id")?;
+    let output = Command::new(herdr_bin)
+        .args(["tab", "focus", tab_id])
+        .output()
+        .map_err(|err| format!("failed to focus tab: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to focus tab: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn notification_decision(pane_id: &str, herdr_bin: &str) -> NotificationDecision {

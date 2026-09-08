@@ -40,17 +40,14 @@ pub(crate) fn write_focus_script(
     notification.pane_id.hash(&mut hasher);
 
     let script_path = state_dir.join(format!("focus-{:016x}.sh", hasher.finish()));
-    let executable_path = if monitor_visibility {
-        env::current_exe().ok()
-    } else {
-        None
-    };
+    let executable_path = env::current_exe()?;
     let script = focus_script_content_with_timeout(
         notification,
         herdr_bin,
         notifier_bin,
         timeout_secs,
-        executable_path.as_deref(),
+        monitor_visibility.then_some(executable_path.as_path()),
+        &executable_path,
     );
 
     fs::write(&script_path, script)?;
@@ -65,6 +62,7 @@ fn focus_script_content_with_timeout(
     notifier_bin: &str,
     timeout_secs: u64,
     executable_path: Option<&Path>,
+    focus_binary: &Path,
 ) -> String {
     let workspace =
         crate::util::workspace_id_from_pane_id(&notification.pane_id).unwrap_or("default");
@@ -83,6 +81,7 @@ fn focus_script_content_with_timeout(
         timeout_secs,
         activation_command(workspace).as_deref(),
         visibility_check_binary,
+        focus_binary,
     )
 }
 
@@ -101,12 +100,14 @@ fn alerter_focus_script(
     timeout_secs: u64,
     activate_command: Option<&str>,
     visibility_check_binary: Option<&Path>,
+    focus_binary: &Path,
 ) -> String {
     let title_q = shell_quote(&notification.title);
     let body_q = shell_quote(&notification.body);
     let group_q = shell_quote(&notification.group);
     let pane_q = shell_quote(&notification.pane_id);
     let herdr_q = shell_quote(herdr_bin);
+    let focus_binary_q = shell_quote(&focus_binary.to_string_lossy());
     let notifier_q = shell_quote(notifier_bin);
     let cleared_marker = cleared_notification_marker_path(&notification.pane_id);
     let cleared_marker_q = shell_quote(cleared_marker.to_string_lossy().as_ref());
@@ -169,9 +170,10 @@ fn alerter_focus_script(
     script.push_str("fi\n");
     script.push_str("case \"$result\" in\n");
     script.push_str(&format!(
-        "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n{activate}    exec {herdr} agent focus {pane}\n    ;;\n",
+        "  Focus|@ACTIONCLICKED|@CONTENTCLICKED)\n{activate}    HERDR_BIN_PATH={herdr} exec {focus_binary} --focus-pane {pane}\n    ;;\n",
         activate = activation_script(activate_command),
         herdr = herdr_q,
+        focus_binary = focus_binary_q,
         pane = pane_q,
     ));
     script.push_str("esac\n");
@@ -232,6 +234,7 @@ mod tests {
             "/opt/homebrew/bin/alerter",
             ALERTER_TIMEOUT_SECS,
             None,
+            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(script.starts_with("#!/bin/sh\n"));
@@ -249,7 +252,7 @@ mod tests {
         assert!(script.contains("notifier_status=$(cat \"$status_path\""));
         assert!(script.contains("exit \"$notifier_status\""));
         assert!(script.contains("Focus|@ACTIONCLICKED|@CONTENTCLICKED)"));
-        assert!(script.contains("exec '/usr/local/bin/herdr' agent focus 'w1:p3'"));
+        assert!(script.contains("HERDR_BIN_PATH='/usr/local/bin/herdr' exec '/tmp/herdr-focus-notify' --focus-pane 'w1:p3'"));
     }
 
     #[test]
@@ -261,6 +264,7 @@ mod tests {
             120,
             None,
             None,
+            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(script.contains("--timeout 120"));
@@ -275,6 +279,7 @@ mod tests {
             0,
             None,
             None,
+            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(!script.contains("--timeout"));
@@ -296,10 +301,11 @@ mod tests {
             3600,
             Some("open -a 'kitty'"),
             None,
+            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(script.contains("open -a 'kitty' >/dev/null 2>&1"));
-        assert!(script.contains("exec '/usr/local/bin/herdr' agent focus 'w1:p3'"));
+        assert!(script.contains("HERDR_BIN_PATH='/usr/local/bin/herdr' exec '/tmp/herdr-focus-notify' --focus-pane 'w1:p3'"));
     }
 
     #[test]
@@ -311,6 +317,7 @@ mod tests {
             3600,
             Some("open -a 'kitty'"),
             Some(Path::new("/tmp/herdr-focus-notify")),
+            Path::new("/tmp/herdr-focus-notify"),
         );
 
         assert!(script.contains("notifier_pid=$!"));

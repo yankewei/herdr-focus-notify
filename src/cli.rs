@@ -6,6 +6,7 @@ pub(crate) enum CliAction {
     Version,
     Cleanup,
     CheckPaneVisibility(String),
+    FocusPane(String),
 }
 
 pub(crate) fn parse_cli_args<I, S>(args: I) -> Result<CliAction, String>
@@ -23,14 +24,18 @@ where
             "-h" | "--help" => set_action(&mut action, CliAction::Help, arg)?,
             "-V" | "--version" => set_action(&mut action, CliAction::Version, arg)?,
             "--cleanup" => set_action(&mut action, CliAction::Cleanup, arg)?,
-            "--check-pane-visibility" => {
+            "--check-pane-visibility" | "--focus-pane" => {
                 if action != CliAction::Event {
                     return Err(format!("cannot combine {arg} with another command"));
                 }
                 let pane_id = args
                     .next()
                     .ok_or_else(|| format!("missing pane ID after {arg}"))?;
-                action = CliAction::CheckPaneVisibility(pane_id.as_ref().to_string());
+                action = if arg == "--focus-pane" {
+                    CliAction::FocusPane(pane_id.as_ref().to_string())
+                } else {
+                    CliAction::CheckPaneVisibility(pane_id.as_ref().to_string())
+                };
             }
             _ => {
                 return Err(format!(

@@ -6,6 +6,12 @@ English | [简体中文](README.zh-CN.md)
 
 It is designed to notify you only when the change is easy to miss: when Herdr is not frontmost, or when you are looking at a different pane.
 
+## Herdr compatibility
+
+For **Herdr 0.9.0, use plugin tag `v0.5.0` or later**. The `v0.4.0` tag predates the client focus changes: clicking a notification may activate the terminal without switching to the target pane. `v0.5.0` adds explicit tab focus after selecting the agent.
+
+The minimum supported Herdr version remains `0.7.5`. Workspace-to-terminal bindings are unchanged.
+
 ## Quick start
 
 ### 1. Install the requirements
@@ -57,7 +63,7 @@ By default, `blocked` and `done` status changes can produce a notification. The 
 | The terminal bound to the pane's workspace is frontmost and the pane is focused | Skipped (you are looking at Herdr) |
 | The focused app cannot be determined | Sent, to avoid missing a change |
 
-Clicking a notification activates the terminal bound to the pane's workspace, then runs `herdr agent focus <pane>`.
+Clicking a notification activates the terminal bound to the pane's workspace, then runs `herdr agent focus <pane>` followed by `herdr tab focus <tab_id>` using the returned tab ID. The second command makes Herdr 0.9.0 clients display the selected pane. When multiple clients share a server, it switches all of them to that tab.
 
 Blocked notifications say that the agent needs your input and prompt you to review and respond. Done notifications say that the agent finished and prompt you to review the result. The plugin does not read or summarize pane contents.
 

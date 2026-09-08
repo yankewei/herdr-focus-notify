@@ -2,6 +2,13 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [0.5.0] - 2026-09-08
+
+### Fixed
+
+- Restore notification click navigation on Herdr 0.9.0 by focusing the returned agent tab after selecting its pane, synchronizing attached client views.
+- Document that Herdr 0.9.0 users need plugin tag `v0.5.0` or later. Workspace-to-terminal binding behavior is unchanged.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added
