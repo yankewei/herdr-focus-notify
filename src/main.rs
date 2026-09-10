@@ -13,11 +13,14 @@ use std::env;
 use std::process::ExitCode;
 
 use cli::{parse_cli_args, print_usage, CliAction};
-use event::{focused_pane_id_from_event_json, notification_from_event_json, status_is_enabled};
+use event::{
+    notification_from_event_json, pane_id_from_event_json, status_is_enabled,
+    workspace_id_from_event_json,
+};
 use executable::resolve_herdr_bin;
 use focus::{
-    learn_terminal_from_frontmost, notification_decision, should_clear_notification_on_focus,
-    test_notification, NotificationDecision,
+    focused_pane_id_in_workspace, learn_terminal_from_frontmost, notification_decision,
+    should_clear_notification_on_focus, test_notification, NotificationDecision,
 };
 use notifier::{remove_notification, resolve_notifier_bin, send_notification};
 use script::write_focus_script;
@@ -80,27 +83,39 @@ fn run() -> Result<(), String> {
                 return Ok(());
             };
 
-            if env::var("HERDR_PLUGIN_EVENT").as_deref() == Ok("pane.focused") {
-                let Some(pane_id) = focused_pane_id_from_event_json(&event_json)? else {
+            let event_name = env::var("HERDR_PLUGIN_EVENT").unwrap_or_default();
+            if event_name == "pane.focused" || event_name == "tab.focused" {
+                // Herdr 0.9.0 fires `tab.focused` when switching between
+                // agents, not `pane.focused` (each agent lives in its own
+                // tab); older layouts may still emit `pane.focused` for
+                // split panes within one tab. Handle both the same way.
+                let Some(workspace) = workspace_id_from_event_json(&event_json)? else {
                     return Ok(());
                 };
 
                 // Zero-configuration terminal detection: bind the frontmost
-                // app to this pane's workspace, so future clicks can activate
-                // it and skip checks can match it. Trusted without a whitelist
-                // because a genuine pane.focused only fires while the user is
+                // app to this workspace, so future clicks can activate it
+                // and skip checks can match it. Trusted without a whitelist
+                // because a genuine focus event only fires while the user is
                 // inside Herdr; a click-spawned focus (frontmost = browser)
                 // gets corrected by the next genuine focus. Best-effort, so
-                // it never hijacks the pane.focused handling.
-                let workspace = util::workspace_id_from_pane_id(&pane_id).unwrap_or("default");
-                learn_terminal_from_frontmost(workspace);
+                // it never hijacks the event handling.
+                learn_terminal_from_frontmost(&workspace);
 
-                if should_clear_notification_on_focus(workspace) {
-                    let notifier_bin = resolve_notifier_bin()?;
-                    mark_notification_cleared(&pane_id)
-                        .map_err(|err| format!("failed to mark notification as cleared: {err}"))?;
-                    remove_notification(&pane_id, &notifier_bin)
-                        .map_err(|err| format!("failed to remove notification: {err}"))?;
+                if should_clear_notification_on_focus(&workspace) {
+                    // `pane.focused` names the pane directly; `tab.focused`
+                    // doesn't, so only then resolve it from the now-focused
+                    // pane in this workspace, one extra `herdr` call.
+                    let pane_id = pane_id_from_event_json(&event_json)?
+                        .or_else(|| focused_pane_id_in_workspace(&workspace, &herdr_bin));
+                    if let Some(pane_id) = pane_id {
+                        let notifier_bin = resolve_notifier_bin()?;
+                        mark_notification_cleared(&pane_id).map_err(|err| {
+                            format!("failed to mark notification as cleared: {err}")
+                        })?;
+                        remove_notification(&pane_id, &notifier_bin)
+                            .map_err(|err| format!("failed to remove notification: {err}"))?;
+                    }
                 }
 
                 return Ok(());

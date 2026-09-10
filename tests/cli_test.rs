@@ -89,6 +89,62 @@ fn focus_event_removes_notification_for_foreground_terminal() {
 
 #[cfg(unix)]
 #[test]
+fn tab_focused_event_learns_terminal_and_clears_notification_via_pane_list() {
+    // `tab.focused` carries no `pane_id` (only `workspace_id`/`tab_id`), so
+    // clearing the pending notification requires asking Herdr which pane is
+    // focused in that workspace.
+    let temp_dir = temp_test_dir();
+
+    let osascript = temp_dir.join("osascript");
+    write_executable(
+        &osascript,
+        "#!/bin/sh\nprintf '%s\\n' 'com.example.terminal'\n",
+    );
+
+    let herdr = temp_dir.join("herdr");
+    write_executable(
+        &herdr,
+        "#!/bin/sh\nprintf '%s\\n' '{\"result\":{\"panes\":[{\"focused\":true,\"pane_id\":\"w7:p2\"}]}}'\n",
+    );
+
+    let notifier = temp_dir.join("alerter");
+    write_executable(
+        &notifier,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NOTIFIER_LOG\"\n",
+    );
+
+    let notifier_log = temp_dir.join("notifier.log");
+    let state_dir = temp_dir.join("state");
+    let path = path_with_temp_dir(&temp_dir);
+    let output = binary()
+        .env("HERDR_PLUGIN_EVENT", "tab.focused")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"tab.focused","data":{"workspace_id":"w7","tab_id":"w7:t2"}}"#,
+        )
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_PLUGIN_STATE_DIR", &state_dir)
+        .env("NOTIFIER_LOG", &notifier_log)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(&notifier_log).unwrap(),
+        "--remove\nherdr-w7-p2\n"
+    );
+    assert!(
+        fs::read_to_string(state_dir.join("terminal-memory.json"))
+            .unwrap()
+            .contains("com.example.terminal"),
+        "expected workspace w7 to be bound to the frontmost terminal"
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn visible_focused_pane_removes_its_pending_notification() {
     let temp_dir = temp_test_dir();
 

@@ -167,6 +167,16 @@ fn focused_pane_id(herdr_bin: &str) -> Option<String> {
     focused_pane_id_from_pane_list_json(&json).ok().flatten()
 }
 
+/// The focused pane's id, scoped to one workspace. `tab.focused` events
+/// carry a `tab_id` but no `pane_id`, so callers that need one (to clear a
+/// pending notification, say) resolve it this way instead. Scoping by
+/// workspace guards against a stale globally-focused pane from another
+/// workspace.
+pub(crate) fn focused_pane_id_in_workspace(workspace: &str, herdr_bin: &str) -> Option<String> {
+    let pane_id = focused_pane_id(herdr_bin)?;
+    (crate::util::workspace_id_from_pane_id(&pane_id) == Some(workspace)).then_some(pane_id)
+}
+
 fn focused_pane_id_from_pane_list_json(json: &str) -> Result<Option<String>, String> {
     let envelope: PaneListEnvelope =
         serde_json::from_str(json).map_err(|err| format!("invalid pane list json: {err}"))?;

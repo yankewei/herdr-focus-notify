@@ -8,7 +8,7 @@ It is designed to notify you only when the change is easy to miss: when Herdr is
 
 ## Herdr compatibility
 
-For **Herdr 0.9.0, use plugin tag `v0.5.0` or later**. The `v0.4.0` tag predates the client focus changes: clicking a notification may activate the terminal without switching to the target pane. `v0.5.0` adds explicit tab focus after selecting the agent.
+For **Herdr 0.9.0, use plugin tag `v0.5.1` or later**. The `v0.4.0` tag predates the client focus changes: clicking a notification may activate the terminal without switching to the target pane. `v0.5.0` adds explicit tab focus after selecting the agent. On Herdr 0.9.0, switching between agents fires `tab.focused` rather than `pane.focused` (each agent lives in its own tab); `v0.5.0` and earlier only listened for `pane.focused`, so the zero-configuration terminal learning below silently never ran. `v0.5.1` also learns from `tab.focused`.
 
 The minimum supported Herdr version remains `0.7.5`. Workspace-to-terminal bindings are unchanged.
 

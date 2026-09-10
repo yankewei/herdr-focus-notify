@@ -12,6 +12,7 @@ struct PluginEvent {
 #[derive(Debug, Deserialize)]
 struct EventData {
     pane_id: Option<String>,
+    workspace_id: Option<String>,
     agent_status: Option<String>,
     agent: Option<String>,
     display_agent: Option<String>,
@@ -77,11 +78,37 @@ pub(crate) fn notification_from_event_json(
     }))
 }
 
-pub(crate) fn focused_pane_id_from_event_json(json: &str) -> Result<Option<String>, String> {
+/// The pane a `pane.focused` event names directly. `tab.focused` events
+/// carry no `pane_id`, so this is `None` for them; callers fall back to
+/// asking Herdr which pane is focused in the workspace instead.
+pub(crate) fn pane_id_from_event_json(json: &str) -> Result<Option<String>, String> {
     let event: PluginEvent =
         serde_json::from_str(json).map_err(|err| format!("invalid event json: {err}"))?;
 
     Ok(event.data.as_ref().and_then(pane_id_from_event_data))
+}
+
+/// The workspace a `pane.focused` or `tab.focused` event belongs to, used to
+/// learn the terminal bound to that workspace. Prefers the event's own
+/// `workspace_id`, falling back to parsing one out of `pane_id` for events
+/// (or test fixtures) that only carry that field.
+pub(crate) fn workspace_id_from_event_json(json: &str) -> Result<Option<String>, String> {
+    let event: PluginEvent =
+        serde_json::from_str(json).map_err(|err| format!("invalid event json: {err}"))?;
+
+    Ok(event.data.as_ref().and_then(|data| {
+        data.workspace_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                pane_id_from_event_data(data)
+                    .as_deref()
+                    .and_then(crate::util::workspace_id_from_pane_id)
+                    .map(str::to_string)
+            })
+    }))
 }
 
 fn pane_id_from_event_data(data: &EventData) -> Option<String> {
@@ -195,17 +222,34 @@ mod tests {
     }
 
     #[test]
-    fn extracts_pane_id_from_focus_event() {
+    fn extracts_workspace_id_from_tab_focused_event() {
+        // tab.focused carries no pane_id, only workspace_id and tab_id.
         let json = r#"{
-            "event": "pane.focused",
+            "event": "tab.focused",
             "data": {
-                "pane_id": " w1:p2 "
+                "workspace_id": "w7",
+                "tab_id": "w7:t2"
             }
         }"#;
 
         assert_eq!(
-            focused_pane_id_from_event_json(json).unwrap(),
-            Some("w1:p2".to_string())
+            workspace_id_from_event_json(json).unwrap(),
+            Some("w7".to_string())
+        );
+    }
+
+    #[test]
+    fn falls_back_to_pane_id_for_workspace_when_workspace_id_missing() {
+        let json = r#"{
+            "event": "pane.focused",
+            "data": {
+                "pane_id": "w1:p2"
+            }
+        }"#;
+
+        assert_eq!(
+            workspace_id_from_event_json(json).unwrap(),
+            Some("w1".to_string())
         );
     }
 }

@@ -1,6 +1,6 @@
 id = "herdr-focus-notify"
 name = "Herdr Focus Notify"
-version = "0.5.0"
+version = "0.5.1"
 min_herdr_version = "0.7.5"
 description = "Clickable desktop notifications that focus the relevant Herdr agent pane."
 platforms = ["macos"]
@@ -22,4 +22,8 @@ command = ["target/release/herdr-focus-notify"]
 
 [[events]]
 on = "pane.focused"
+command = ["target/release/herdr-focus-notify"]
+
+[[events]]
+on = "tab.focused"
 command = ["target/release/herdr-focus-notify"]
