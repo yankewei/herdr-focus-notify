@@ -103,10 +103,23 @@ fn run() -> Result<(), String> {
                 learn_terminal_from_frontmost(&workspace);
 
                 if should_clear_notification_on_focus(&workspace) {
-                    // `pane.focused` names the pane directly; `tab.focused`
-                    // doesn't, so only then resolve it from the now-focused
-                    // pane in this workspace, one extra `herdr` call.
+                    // `pane.focused` names the pane directly. `tab.focused`
+                    // does not, but Herdr captures that tab's focused pane in
+                    // the plugin invocation context as HERDR_PANE_ID. Prefer
+                    // that event-scoped value so a later tab switch cannot
+                    // race this asynchronous hook. Keep pane-list lookup only
+                    // as a defensive fallback for incomplete/manual contexts.
                     let pane_id = pane_id_from_event_json(&event_json)?
+                        .or_else(|| {
+                            env::var("HERDR_PANE_ID")
+                                .ok()
+                                .map(|value| value.trim().to_string())
+                                .filter(|value| !value.is_empty())
+                                .filter(|pane_id| {
+                                    util::workspace_id_from_pane_id(pane_id)
+                                        == Some(workspace.as_str())
+                                })
+                        })
                         .or_else(|| focused_pane_id_in_workspace(&workspace, &herdr_bin));
                     if let Some(pane_id) = pane_id {
                         let notifier_bin = resolve_notifier_bin()?;

@@ -79,8 +79,8 @@ pub(crate) fn notification_from_event_json(
 }
 
 /// The pane a `pane.focused` event names directly. `tab.focused` events
-/// carry no `pane_id`, so this is `None` for them; callers fall back to
-/// asking Herdr which pane is focused in the workspace instead.
+/// carry no `pane_id`, so this is `None` for them; callers can use Herdr's
+/// event-scoped plugin context (`HERDR_PANE_ID`) before any live-state fallback.
 pub(crate) fn pane_id_from_event_json(json: &str) -> Result<Option<String>, String> {
     let event: PluginEvent =
         serde_json::from_str(json).map_err(|err| format!("invalid event json: {err}"))?;

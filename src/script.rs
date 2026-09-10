@@ -190,8 +190,9 @@ fn activation_script(activate_command: Option<&str>) -> String {
 
 /// The command that brings the terminal/Herdr host app to the front before
 /// focusing the agent pane: whichever terminal is bound to the pane's
-/// workspace, learned from `pane.focused` events. Zero configuration, and it
-/// follows the user across terminals per-workspace.
+/// workspace, learned from Herdr focus events (`pane.focused` or
+/// `tab.focused`). Zero configuration, and it follows the user across
+/// terminals per-workspace.
 fn activation_command(workspace: &str) -> Option<String> {
     crate::state::remembered_terminal(workspace)
         .map(|bound| format!("open -b {}", shell_quote(&bound)))

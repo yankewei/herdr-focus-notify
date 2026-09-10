@@ -107,13 +107,12 @@ pub(crate) fn should_clear_notification_on_focus(workspace: &str) -> bool {
 
 /// Learns the currently frontmost app as the terminal bound to `workspace`.
 ///
-/// No whitelist: a `pane.focused` event only fires while the user is
-/// operating Herdr inside a terminal, so the frontmost app is trusted to be
-/// that terminal. The one spoofable path is a `pane.focused` produced by
-/// `herdr agent focus` after a notification click (frontmost is then the
-/// browser or notification app); that mis-binding is bounded to this
-/// workspace and corrected on the next genuine focus. Best-effort: a failure
-/// must never break the pane.focused handling.
+/// No whitelist: a genuine Herdr focus event (`pane.focused` or `tab.focused`)
+/// fires while the user is operating Herdr inside a terminal, so the frontmost
+/// app is trusted to be that terminal. A click-spawned focus can briefly see a
+/// different frontmost app if terminal activation fails; that mis-binding is
+/// bounded to this workspace and corrected on the next genuine focus.
+/// Best-effort: a failure must never break focus-event handling.
 pub(crate) fn learn_terminal_from_frontmost(workspace: &str) -> Option<String> {
     let frontmost = frontmost_bundle_id()?;
     // Skip the write when the workspace is already bound to this app.
@@ -167,11 +166,10 @@ fn focused_pane_id(herdr_bin: &str) -> Option<String> {
     focused_pane_id_from_pane_list_json(&json).ok().flatten()
 }
 
-/// The focused pane's id, scoped to one workspace. `tab.focused` events
-/// carry a `tab_id` but no `pane_id`, so callers that need one (to clear a
-/// pending notification, say) resolve it this way instead. Scoping by
-/// workspace guards against a stale globally-focused pane from another
-/// workspace.
+/// Defensive fallback for focus events whose payload and plugin context do
+/// not identify a pane. The normal `tab.focused` path uses Herdr's captured
+/// `HERDR_PANE_ID`; this live lookup is intentionally last because focus may
+/// have changed by the time an asynchronous plugin hook runs.
 pub(crate) fn focused_pane_id_in_workspace(workspace: &str, herdr_bin: &str) -> Option<String> {
     let pane_id = focused_pane_id(herdr_bin)?;
     (crate::util::workspace_id_from_pane_id(&pane_id) == Some(workspace)).then_some(pane_id)

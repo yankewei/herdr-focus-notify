@@ -44,8 +44,8 @@ There are no submodules, no external crates beyond serde/serde_json, and no buil
    - `--help` and `--version` print to stdout before plugin setup.
 3. **Notification decision**:
    - Only `blocked` and `done` statuses can produce notifications (they are the ones that need user action). There is no configuration to change this set.
-   - The decision is one of `Skip`, `Send`, or `SendWithVisibilityMonitor`: `Skip` only when the target pane is focused **and** the frontmost macOS app matches the terminal bound to the pane's workspace (learned from `pane.focused` events); `SendWithVisibilityMonitor` when the pane is focused but the frontmost app differs from the bound terminal, so the notification auto-dismisses once the pane is seen; plain `Send` otherwise (including when the frontmost app or the binding is unknown), to avoid missing a state change.
-   - `pane.focused` events bind the frontmost terminal to the pane's workspace (`learn_terminal_from_frontmost`), so the plugin works with zero configuration.
+   - The decision is one of `Skip`, `Send`, or `SendWithVisibilityMonitor`: `Skip` only when the target pane is focused **and** the frontmost macOS app matches the terminal bound to the pane's workspace (learned from Herdr focus events); `SendWithVisibilityMonitor` when the pane is focused but the frontmost app differs from the bound terminal, so the notification auto-dismisses once the pane is seen; plain `Send` otherwise (including when the frontmost app or the binding is unknown), to avoid missing a state change.
+   - `pane.focused` and `tab.focused` events bind the frontmost terminal to the event's workspace (`learn_terminal_from_frontmost`), so the plugin works with zero configuration. For `tab.focused`, notification clearing prefers Herdr's event-scoped `HERDR_PANE_ID` over a live pane lookup, avoiding races if the user switches tabs again before the asynchronous hook runs.
    - Recognized agent names are matched to bundled local PNG icons and passed to `alerter` with `--app-icon`.
    - Notification titles and bodies use short status-specific copy: blocked agents ask the user to review and respond, while done agents ask the user to review the result. The plugin does not read or summarize pane contents.
 4. **Binary resolution**:
@@ -70,7 +70,7 @@ Two environment hooks remain for tests and unusual installs:
 | `HERDR_BIN_PATH` | Explicit path to the `herdr` binary; takes precedence over `PATH` and the hard-coded candidates. |
 | `HERDR_PLUGIN_STATE_DIR` | Overrides the state directory, where generated scripts, `terminal-memory.json`, and cleanup markers live (falls back to `$TMPDIR/herdr-focus-notify`). |
 
-Herdr itself also sets `HERDR_PLUGIN_EVENT_JSON` (event payload) and `HERDR_PLUGIN_EVENT` (event name) when invoking the plugin.
+Herdr itself sets `HERDR_PLUGIN_EVENT_JSON` (event payload), `HERDR_PLUGIN_EVENT` (event name), and event-scoped context such as `HERDR_PANE_ID` when invoking the plugin.
 
 Bundled agent icons are extracted from `@lobehub/icons-static-png` (except `omp.png` and `pi.png`, which use the official Oh My Pi and Pi logos) and attributed in `assets/icons/NOTICE.md`.
 

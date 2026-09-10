@@ -7,7 +7,7 @@ All notable changes to `herdr-focus-notify` are documented here.
 ### Fixed
 
 - Learn the workspace-to-terminal binding from `tab.focused` events, not just `pane.focused`. On Herdr 0.9.0, switching between agents (each living in its own tab) fires `tab.focused`; `pane.focused` never fires for that flow, so the zero-configuration terminal learning described in the README silently never ran, and clicking a notification never activated the terminal.
-- Resolve the focused pane from `herdr pane list`, scoped to the event's workspace, when clearing a pending notification for a `tab.focused` event that carries no `pane_id` of its own. `pane.focused` events keep using their own `pane_id` directly, so no config changes and no extra `herdr` call for that path.
+- For `tab.focused`, clear pending notifications using Herdr's event-scoped `HERDR_PANE_ID`, which identifies the pane that was focused when the event was captured. This avoids racing a later tab switch while the asynchronous plugin hook starts; `herdr pane list` remains only as a defensive fallback for incomplete/manual contexts.
 
 ## [0.5.0] - 2026-09-08
 

@@ -15,7 +15,7 @@ pub(crate) fn plugin_state_dir() -> PathBuf {
         .unwrap_or_else(|| env::temp_dir().join("herdr-focus-notify"))
 }
 
-/// The most recently used terminal (learned from `pane.focused` events) is
+/// The most recently used terminal (learned from Herdr focus events) is
 /// persisted here so a click can activate it and skip checks can match it,
 /// with no configuration required.
 pub(crate) fn remember_terminal(workspace: &str, bundle_id: &str) -> io::Result<()> {
@@ -24,8 +24,8 @@ pub(crate) fn remember_terminal(workspace: &str, bundle_id: &str) -> io::Result<
     remember_terminal_into(&state_dir, workspace, bundle_id)
 }
 
-/// The terminal bound to a pane's workspace, learned from `pane.focused`
-/// events. `None` until the workspace has been focused at least once.
+/// The terminal bound to a pane's workspace, learned from `pane.focused` or
+/// `tab.focused`. `None` until the workspace has been focused at least once.
 pub(crate) fn remembered_terminal(workspace: &str) -> Option<String> {
     read_terminal_bindings_from(&terminal_memory_path())?
         .get(workspace)
