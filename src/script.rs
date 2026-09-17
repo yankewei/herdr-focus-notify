@@ -12,9 +12,30 @@ use crate::state::{
 };
 use crate::util::shell_quote;
 
+/// Environment variable that overrides how long an unclicked notification
+/// stays up.
+const TIMEOUT_ENV_VAR: &str = "HERDR_FOCUS_NOTIFY_TIMEOUT_SECS";
+
 /// How long an unclicked notification stays up (seconds) before alerter
 /// auto-dismisses it; 0 would keep it forever.
-const ALERTER_TIMEOUT_SECS: u64 = 3600;
+///
+/// `alerter` grows its resident memory for as long as it waits — measured at a
+/// steady ~12.9 MB/min — so the timeout doubles as a leak bound. At one hour a
+/// single unclicked notification reaches roughly 774 MB; five minutes caps it
+/// near 65 MB. Agents that finish while nobody is at the keyboard would
+/// otherwise stack one such waiter per pane.
+const DEFAULT_ALERTER_TIMEOUT_SECS: u64 = 300;
+
+/// Reads the notification timeout, falling back to the default when the
+/// override is absent or unparseable.
+fn alerter_timeout_secs() -> u64 {
+    parse_timeout_secs(env::var(TIMEOUT_ENV_VAR).ok().as_deref())
+}
+
+fn parse_timeout_secs(raw: Option<&str>) -> u64 {
+    raw.and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_ALERTER_TIMEOUT_SECS)
+}
 
 pub(crate) fn write_focus_script(
     notification: &FocusNotification,
@@ -31,10 +52,11 @@ pub(crate) fn write_focus_script(
     let _ = rewrite_generated_scripts_without_activation();
     let _ = prune_stale_workspace_bindings(herdr_bin);
 
+    let configured_timeout_secs = alerter_timeout_secs();
     let timeout_secs = if test_mode {
-        test_timeout_secs(ALERTER_TIMEOUT_SECS)
+        test_timeout_secs(configured_timeout_secs)
     } else {
-        ALERTER_TIMEOUT_SECS
+        configured_timeout_secs
     };
 
     let mut hasher = DefaultHasher::new();
@@ -261,7 +283,7 @@ mod tests {
             &sample_notification(),
             "/usr/local/bin/herdr",
             "/opt/homebrew/bin/alerter",
-            ALERTER_TIMEOUT_SECS,
+            DEFAULT_ALERTER_TIMEOUT_SECS,
             None,
             Path::new("/tmp/herdr-focus-notify"),
         );
@@ -282,6 +304,41 @@ mod tests {
         assert!(script.contains("exit \"$notifier_status\""));
         assert!(script.contains("Focus|@ACTIONCLICKED|@CONTENTCLICKED)"));
         assert!(script.contains("HERDR_BIN_PATH='/usr/local/bin/herdr' exec '/tmp/herdr-focus-notify' --focus-pane 'w1:p3'"));
+    }
+
+    #[test]
+    fn timeout_defaults_when_override_is_absent_or_invalid() {
+        assert_eq!(parse_timeout_secs(None), DEFAULT_ALERTER_TIMEOUT_SECS);
+        assert_eq!(parse_timeout_secs(Some("")), DEFAULT_ALERTER_TIMEOUT_SECS);
+        assert_eq!(
+            parse_timeout_secs(Some("soon")),
+            DEFAULT_ALERTER_TIMEOUT_SECS
+        );
+        assert_eq!(parse_timeout_secs(Some("-5")), DEFAULT_ALERTER_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn timeout_override_is_parsed() {
+        assert_eq!(parse_timeout_secs(Some("900")), 900);
+        assert_eq!(parse_timeout_secs(Some("  900  ")), 900);
+    }
+
+    #[test]
+    fn timeout_override_of_zero_keeps_the_notification_forever() {
+        // 0 is a deliberate opt-out: `alerter_focus_script` omits `--timeout`.
+        assert_eq!(parse_timeout_secs(Some("0")), 0);
+    }
+
+    #[test]
+    fn default_timeout_bounds_the_alerter_memory_leak() {
+        // `alerter` grows ~12.9 MB/min while it waits, so the default has to
+        // stay short enough that one unclicked notification cannot balloon.
+        let default = parse_timeout_secs(None);
+
+        assert!(
+            default > 0 && default <= 600,
+            "default timeout {default}s lets a single waiter leak past ~130 MB"
+        );
     }
 
     #[test]
