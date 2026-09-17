@@ -2,6 +2,16 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Bound the memory a pending notification can consume. `alerter` grows its resident memory for as long as it waits for a click — a steady ~12.9 MB/min with no plateau — and the notification timeout was one hour, so a single unclicked notification reached roughly 774 MB. Agents that finish while nobody is at the keyboard stack one waiter per pane: on a 29-pane session this left 11 concurrent `alerter` processes holding 2.6 GB, which pushed the machine into continuous swapping and drove load average to 289 on an 18-core Mac. The default timeout is now 5 minutes, capping one waiter near 65 MB.
+
+### Added
+
+- `HERDR_FOCUS_NOTIFY_TIMEOUT_SECS` overrides the notification timeout in seconds, for setups that want longer-lived notifications and can afford the memory. `0` keeps notifications up until clicked, as before.
+
 ## [0.6.0] - 2026-09-17
 
 ### Fixed

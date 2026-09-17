@@ -79,6 +79,26 @@ If the pane was already active when the notification arrived, returning to that 
 
 The `--test` action sends a real test notification (capped at 10 seconds) so you can verify the whole pipeline.
 
+## Notification lifetime
+
+An unclicked notification stays up for **5 minutes**, then `alerter` dismisses it.
+
+The cap exists because `alerter` grows its resident memory for as long as it waits — a steady ~12.9 MB/min, with no plateau. That cost is invisible with one notification and compounds badly without one: agents finishing while nobody is at the keyboard stack one waiter per pane, and each keeps growing until it is clicked or times out.
+
+| Timeout | Resident memory of one unclicked notification |
+|---|---|
+| 5 min (default) | ~65 MB |
+| 30 min | ~390 MB |
+| 60 min | ~774 MB |
+
+Override it with `HERDR_FOCUS_NOTIFY_TIMEOUT_SECS` (seconds) if you want longer-lived notifications and can afford the memory:
+
+```bash
+HERDR_FOCUS_NOTIFY_TIMEOUT_SECS=900 herdr
+```
+
+`0` disables the timeout entirely, which keeps notifications up until clicked — and lets the leak grow unbounded.
+
 ## Troubleshooting
 
 | Problem | What to check |
