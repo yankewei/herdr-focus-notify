@@ -247,14 +247,20 @@ pub(crate) fn frontmost_bundle_id() -> Option<String> {
     bundle_id_from_lsappinfo(&info)
 }
 
-/// Reads the `bundleID="..."` field out of `lsappinfo info` output. An app
-/// without a bundle identifier reports `[ NULL ]`, which is not a binding.
+/// Reads the bundle identifier from either form of `lsappinfo info` output.
+/// An app without a bundle identifier reports `[ NULL ]`, which is not a binding.
 fn bundle_id_from_lsappinfo(output: &str) -> Option<String> {
     output
         .lines()
         .map(str::trim)
-        .find_map(|line| line.strip_prefix("bundleID="))
-        .map(|value| value.trim_matches('"').trim().to_string())
+        .find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            match key.trim().trim_matches('"') {
+                "bundleID" | "CFBundleIdentifier" => Some(value),
+                _ => None,
+            }
+        })
+        .map(|value| value.trim().trim_matches('"').to_string())
         .filter(|value| !value.is_empty() && !value.starts_with('['))
 }
 
@@ -491,6 +497,15 @@ mod tests {
         );
         // `bundle path` and `executable path` are separate fields, and an app
         // without a bundle identifier must not become a binding.
+        let current = "\"CFBundleIdentifier\"=\"com.mitchellh.ghostty\"\n";
+        assert_eq!(
+            bundle_id_from_lsappinfo(current).as_deref(),
+            Some("com.mitchellh.ghostty")
+        );
+        assert_eq!(
+            bundle_id_from_lsappinfo("\"CFBundleIdentifier\"=[ NULL ]\n"),
+            None
+        );
         assert_eq!(bundle_id_from_lsappinfo("    bundleID=[ NULL ] \n"), None);
         assert_eq!(bundle_id_from_lsappinfo(""), None);
     }

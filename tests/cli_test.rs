@@ -89,6 +89,41 @@ fn focus_event_removes_notification_for_foreground_terminal() {
 
 #[cfg(unix)]
 #[test]
+fn focus_event_learns_terminal_from_cfbundleidentifier() {
+    let temp_dir = temp_test_dir();
+    let state_dir = temp_dir.join("state");
+
+    write_executable(
+        &temp_dir.join("lsappinfo"),
+        "#!/bin/sh\ncase \"$1\" in\n  front) printf '%s\\n' 'ASN:0x0-0x1:' ;;\n  *) printf '%s\\n' '\"CFBundleIdentifier\"=\"com.mitchellh.ghostty\"' ;;\nesac\n",
+    );
+    write_executable(&temp_dir.join("alerter"), "#!/bin/sh\nexit 0\n");
+
+    let output = binary()
+        .env("HERDR_PLUGIN_EVENT", "pane.focused")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"pane.focused","data":{"pane_id":"w1:p2"}}"#,
+        )
+        .env("HERDR_PLUGIN_STATE_DIR", &state_dir)
+        .env("PATH", path_with_temp_dir(&temp_dir))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(state_dir.join("terminal-memory.json")).unwrap(),
+        r#"{"workspaces":{"w1":"com.mitchellh.ghostty"}}"#
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn visible_focused_pane_removes_its_pending_notification() {
     let temp_dir = temp_test_dir();
 
