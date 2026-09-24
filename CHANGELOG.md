@@ -2,6 +2,12 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [0.7.1] - 2026-09-24
+
+### Fixed
+
+- Parse the `CFBundleIdentifier` form of `lsappinfo` output on macOS Tahoe, so `pane.focused` events learn the workspace's terminal binding and notification clicks can focus the pane after saved bindings are cleared.
+
 ## [0.7.0] - 2026-09-19
 
 ### Added
