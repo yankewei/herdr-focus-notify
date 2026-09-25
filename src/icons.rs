@@ -59,17 +59,18 @@ const AGENT_ICONS: &[AgentIcon] = &[
         file: "gemini-color.png",
         bytes: include_bytes!("../assets/icons/agents/gemini-color.png"),
     },
+    // Match explicit Microsoft branding before the generic Copilot substring.
     AgentIcon {
-        exact: &["githubcopilot"],
-        substring: Some("githubcopilot"),
-        file: "githubcopilot.png",
-        bytes: include_bytes!("../assets/icons/agents/githubcopilot.png"),
-    },
-    AgentIcon {
-        exact: &["copilot", "microsoftcopilot"],
-        substring: Some("copilot"),
+        exact: &["microsoftcopilot"],
+        substring: Some("microsoftcopilot"),
         file: "copilot-color.png",
         bytes: include_bytes!("../assets/icons/agents/copilot-color.png"),
+    },
+    AgentIcon {
+        exact: &["copilot", "githubcopilot"],
+        substring: Some("copilot"),
+        file: "githubcopilot.png",
+        bytes: include_bytes!("../assets/icons/agents/githubcopilot.png"),
     },
     AgentIcon {
         exact: &["deepseek"],
@@ -259,7 +260,12 @@ mod tests {
             ("Codex", "codex-color.png"),
             ("OpenAI Codex", "codex-color.png"),
             ("Claude Code", "claudecode-color.png"),
+            ("copilot", "githubcopilot.png"),
+            ("Copilot CLI", "githubcopilot.png"),
             ("GitHub Copilot", "githubcopilot.png"),
+            ("GitHub Copilot CLI", "githubcopilot.png"),
+            ("Microsoft Copilot", "copilot-color.png"),
+            ("Microsoft Copilot Chat", "copilot-color.png"),
             ("Gemini CLI", "geminicli-color.png"),
             ("DeepSeek", "deepseek-color.png"),
             ("Qwen", "qwen-color.png"),
@@ -285,6 +291,17 @@ mod tests {
         assert_eq!(
             fs::read(path).unwrap(),
             include_bytes!("../assets/icons/agents/codex-color.png")
+        );
+    }
+
+    #[test]
+    fn writes_github_copilot_icon_for_copilot_cli() {
+        let path = agent_icon_path(&[Some("copilot")]).unwrap();
+
+        assert!(path.ends_with("/icons/githubcopilot.png"));
+        assert_eq!(
+            fs::read(path).unwrap(),
+            include_bytes!("../assets/icons/agents/githubcopilot.png")
         );
     }
 
