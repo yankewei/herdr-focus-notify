@@ -2,6 +2,12 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [0.7.2] - 2026-09-26
+
+### Fixed
+
+- Show the GitHub Copilot icon for Herdr's `copilot` agent (GitHub Copilot CLI) and names such as `Copilot CLI`, instead of the Microsoft Copilot logo. Explicitly Microsoft-branded names such as `Microsoft Copilot` keep the Microsoft icon.
+
 ## [0.7.1] - 2026-09-24
 
 ### Fixed
