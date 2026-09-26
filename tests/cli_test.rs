@@ -249,7 +249,7 @@ fn normal_notification_uses_status_specific_copy_without_requesting_an_explanati
     let notifier = temp_dir.join("alerter");
     write_executable(
         &notifier,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NOTIFIER_LOG\"\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NOTIFIER_LOG.tmp\"\nmv \"$NOTIFIER_LOG.tmp\" \"$NOTIFIER_LOG\"\n",
     );
 
     let notifier_log = temp_dir.join("notifier.log");
@@ -270,9 +270,8 @@ fn normal_notification_uses_status_specific_copy_without_requesting_an_explanati
         .unwrap();
 
     assert!(output.status.success());
-    // The notifier runs in a detached script, so the log file can exist
-    // (truncated by the shell redirect) before its content is written.
-    // Poll for the content itself instead of just file existence.
+    // The notifier runs in a detached script. The fake notifier renames its
+    // log into place, so the file appears only once all arguments are written.
     let mut notifier_output = String::new();
     for _ in 0..500 {
         notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
@@ -288,6 +287,7 @@ fn normal_notification_uses_status_specific_copy_without_requesting_an_explanati
     assert!(!fs::read_to_string(&herdr_log)
         .unwrap_or_default()
         .contains("explain"));
+    wait_for_detached_notifier(&temp_dir.join("state"));
     fs::remove_dir_all(temp_dir).unwrap();
 }
 
@@ -346,6 +346,7 @@ fn unfocused_pane_does_not_start_a_visibility_monitor() {
 
     let notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
     assert!(!notifier_output.contains("--remove\nherdr-w1-p2\n"));
+    wait_for_detached_notifier(&temp_dir.join("state"));
     fs::remove_dir_all(temp_dir).unwrap();
 }
 
@@ -363,6 +364,30 @@ fn temp_test_dir() -> PathBuf {
     ));
     fs::create_dir(&temp_dir).unwrap();
     temp_dir
+}
+
+/// Waits for a detached focus script to remove its notifier temp files. The
+/// script writes the notifier status after the fake notifier has logged, so
+/// removing the state directory earlier races with that write and fails with
+/// `DirectoryNotEmpty`.
+#[cfg(unix)]
+fn wait_for_detached_notifier(state_dir: &Path) {
+    let pending = || {
+        fs::read_dir(state_dir).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.contains(".result.") || name.contains(".status.")
+            })
+        })
+    };
+    for _ in 0..500 {
+        if !pending() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("detached notifier script did not finish");
 }
 
 #[cfg(unix)]
