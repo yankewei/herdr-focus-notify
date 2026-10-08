@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::icons::agent_icon_path;
-use crate::notification::FocusNotification;
+use crate::notification::{FocusNotification, PaneLabels};
 use crate::util::notification_group_id;
 
 #[derive(Debug, Deserialize)]
@@ -98,19 +98,11 @@ pub(crate) fn focused_pane_id_from_event_json(json: &str) -> Result<Option<Strin
 }
 
 fn pane_id_from_event_data(data: &EventData) -> Option<String> {
-    data.pane_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    trimmed(data.pane_id.as_deref()).map(str::to_string)
 }
 
 fn first_non_empty<const N: usize>(values: [Option<&str>; N]) -> Option<&str> {
-    values
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|value| !value.is_empty())
+    values.into_iter().find_map(trimmed)
 }
 
 /// Lays the notification out like the Agent sidebar's own rows: state, then
@@ -118,20 +110,17 @@ fn first_non_empty<const N: usize>(values: [Option<&str>; N]) -> Option<&str> {
 /// subtitle, and the pane's title as the message. Every input is optional, so a
 /// failed `herdr` call, or a pane Herdr cannot describe, leaves the event-only
 /// message in place.
-pub(crate) fn enrich_notification(
-    notification: &mut FocusNotification,
-    workspace_label: Option<&str>,
-    tab_label: Option<&str>,
-    terminal_title: Option<&str>,
-    git_label: Option<&str>,
-) {
-    for extra in [workspace_label, tab_label].into_iter().filter_map(trimmed) {
+pub(crate) fn enrich_notification(notification: &mut FocusNotification, labels: &PaneLabels) {
+    for extra in [&labels.workspace, &labels.tab]
+        .into_iter()
+        .filter_map(|label| trimmed(label.as_deref()))
+    {
         notification.title.push_str(" · ");
         notification.title.push_str(extra);
     }
 
     // The event already put the agent in the subtitle; the git state joins it.
-    if let Some(git_label) = trimmed(git_label) {
+    if let Some(git_label) = trimmed(labels.git.as_deref()) {
         match notification.subtitle.as_mut() {
             Some(subtitle) => {
                 subtitle.push_str(" · ");
@@ -141,7 +130,7 @@ pub(crate) fn enrich_notification(
         }
     }
 
-    if let Some(task) = trimmed(terminal_title) {
+    if let Some(task) = trimmed(labels.terminal_title.as_deref()) {
         notification.body = task.to_string();
     }
 }
@@ -248,10 +237,12 @@ mod tests {
 
         enrich_notification(
             &mut notification,
-            Some(" sample-repo "),
-            Some("status"),
-            Some("Tidy up the parser tests"),
-            Some("main* +120/-45"),
+            &PaneLabels {
+                workspace: Some(" sample-repo ".to_string()),
+                tab: Some("status".to_string()),
+                terminal_title: Some("Tidy up the parser tests".to_string()),
+                git: Some("main* +120/-45".to_string()),
+            },
         );
 
         assert_eq!(notification.title, "Blocked · sample-repo · status");
@@ -274,7 +265,14 @@ mod tests {
         }"#;
         let mut notification = notification_from_event_json(json).unwrap().unwrap();
 
-        enrich_notification(&mut notification, None, Some("  "), Some(""), None);
+        enrich_notification(
+            &mut notification,
+            &PaneLabels {
+                tab: Some("  ".to_string()),
+                terminal_title: Some(String::new()),
+                ..PaneLabels::default()
+            },
+        );
 
         assert_eq!(notification.title, "Blocked");
         assert_eq!(notification.subtitle.as_deref(), Some("Codex"));

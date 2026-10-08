@@ -23,10 +23,8 @@ use event::{
 use executable::resolve_herdr_bin;
 use focus::{
     frontmost_bundle_id, learn_terminal_from_frontmost, notification_decision, pane_details,
-    should_clear_notification_on_focus, tab_label, test_notification, workspace_label,
-    worktree_branch, NotificationDecision, PaneDetails,
+    pane_labels, should_clear_notification_on_focus, test_notification, NotificationDecision,
 };
-use notification::FocusNotification;
 use notifier::{remove_notification, resolve_notifier_bin, send_notification};
 use script::{rewrite_generated_scripts_without_activation, write_focus_script};
 use state::{
@@ -88,9 +86,8 @@ fn run() -> Result<(), String> {
         CliAction::CheckPaneVisibility(pane_id) => {
             let herdr_bin = resolve_herdr_bin()?;
             let deadline = Instant::now() + LOOKUP_BUDGET;
-            let focused =
-                pane_details(&pane_id, &herdr_bin, deadline).is_some_and(|details| details.focused);
-            if notification_decision(&pane_id, focused) == NotificationDecision::Skip {
+            let details = pane_details(&pane_id, &herdr_bin, deadline).unwrap_or_default();
+            if notification_decision(&pane_id, details.focused) == NotificationDecision::Skip {
                 return Ok(());
             }
             return Err("pane is not visible in its workspace's bound terminal".to_string());
@@ -120,7 +117,7 @@ fn run() -> Result<(), String> {
                 // focus events and obvious non-terminal apps, while keeping this
                 // event path best-effort.
                 let frontmost = frontmost_bundle_id();
-                let workspace = util::workspace_id_from_pane_id(&pane_id).unwrap_or("default");
+                let workspace = util::workspace_of(&pane_id);
                 learn_terminal_from_frontmost(workspace, frontmost.as_deref());
 
                 if should_clear_notification_on_focus(workspace, frontmost.as_deref()) {
@@ -159,10 +156,9 @@ fn run() -> Result<(), String> {
     // suppressed notification must not pay for them. An unanswered lookup
     // counts as unfocused, so the notification is sent.
     let deadline = Instant::now() + LOOKUP_BUDGET;
-    let details = pane_details(&notification.pane_id, &herdr_bin, deadline);
-    let focused = details.as_ref().is_some_and(|details| details.focused);
+    let details = pane_details(&notification.pane_id, &herdr_bin, deadline).unwrap_or_default();
 
-    let mut notification_decision = notification_decision(&notification.pane_id, focused);
+    let mut notification_decision = notification_decision(&notification.pane_id, details.focused);
     if notification_decision == NotificationDecision::Skip {
         if action == CliAction::Test {
             // When enabled, --test validates the pipeline end to end, so it
@@ -174,14 +170,21 @@ fn run() -> Result<(), String> {
         }
     }
 
+    // Resolved before the lookups behind the text, so an install without a
+    // notifier fails without paying for them.
+    let notifier_bin = resolve_notifier_bin()?;
+
+    // `--test` deliberately keeps its own copy: it describes the plugin rather
+    // than a pane, and it is the text a user reads while checking their setup
+    // against what they expect to see.
     if action != CliAction::Test {
-        enrich_from_pane(&mut notification, details.as_ref(), &herdr_bin, deadline);
+        let labels = pane_labels(&notification.pane_id, details, &herdr_bin, deadline);
+        enrich_notification(&mut notification, &labels);
     }
 
     reset_notification_clearance(&notification.pane_id)
         .map_err(|err| format!("failed to reset notification clearance: {err}"))?;
 
-    let notifier_bin = resolve_notifier_bin()?;
     let script_path = write_focus_script(
         &notification,
         &herdr_bin,
@@ -195,39 +198,4 @@ fn run() -> Result<(), String> {
         .map_err(|err| format!("failed to send notification: {err}"))?;
 
     Ok(())
-}
-
-/// Names the workspace, the tab, the terminal title, and the pane's git state on
-/// a notification that is going to be shown.
-///
-/// `--test` deliberately keeps its own copy: it describes the plugin rather than
-/// a pane, and it is the text a user reads while checking their setup against
-/// what they expect to see.
-fn enrich_from_pane(
-    notification: &mut FocusNotification,
-    details: Option<&PaneDetails>,
-    herdr_bin: &str,
-    deadline: Instant,
-) {
-    let workspace_label = workspace_label(&notification.pane_id, herdr_bin, deadline);
-    let tab_label = details
-        .and_then(|details| details.tab_id.as_deref())
-        .and_then(|tab_id| tab_label(tab_id, herdr_bin, deadline));
-    let cwd = details.and_then(|details| details.cwd.as_deref());
-    // Without a branch there is nothing to attribute the changes to, so the
-    // git probe is not worth its time: a detached `HEAD` or a directory outside
-    // a repository contributes nothing rather than a bare `+120/-45` that
-    // explains neither where nor what.
-    let git_label = cwd.and_then(|cwd| {
-        let branch = worktree_branch(cwd, herdr_bin, deadline)?;
-        Some(git::label(&branch, git::changes(cwd, deadline)))
-    });
-
-    enrich_notification(
-        notification,
-        workspace_label.as_deref(),
-        tab_label.as_deref(),
-        details.and_then(|details| details.terminal_title.as_deref()),
-        git_label.as_deref(),
-    );
 }

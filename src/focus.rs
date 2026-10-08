@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::env;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -6,8 +7,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::notification::FocusNotification;
-use crate::util::{command_stdout, command_stdout_until, sanitize_group_id};
+use crate::notification::{FocusNotification, PaneLabels};
+use crate::util::{command_stdout, command_stdout_until, sanitize_group_id, workspace_of};
 
 /// How long a notification click waits for Herdr's pane focus response. A real
 /// click runs detached, where an unanswered request would leave a stray process
@@ -18,6 +19,12 @@ const FOCUS_SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Deserialize)]
 struct Envelope<T> {
     result: Option<T>,
+}
+
+/// The result inside a Herdr CLI reply. None for a reply that cannot be read:
+/// every caller treats that like a Herdr that did not answer.
+fn herdr_result<T: DeserializeOwned>(json: &str) -> Option<T> {
+    serde_json::from_str::<Envelope<T>>(json).ok()?.result
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,12 +103,15 @@ pub(crate) fn test_notification(herdr_bin: &str) -> FocusNotification {
 }
 
 /// Everything one `herdr agent get` answers about a pane: whether Herdr calls it
-/// the focused one, and the handful of fields a notification names.
+/// the focused one, and the handful of fields a notification names. The default
+/// is what an unanswered lookup amounts to: an unfocused pane, so the
+/// notification is sent, with nothing to add to it.
+#[derive(Default)]
 pub(crate) struct PaneDetails {
     pub(crate) focused: bool,
-    pub(crate) cwd: Option<String>,
-    pub(crate) tab_id: Option<String>,
-    pub(crate) terminal_title: Option<String>,
+    cwd: Option<String>,
+    tab_id: Option<String>,
+    terminal_title: Option<String>,
 }
 
 /// One `herdr agent get`, so the decision to notify at all and the
@@ -113,25 +123,55 @@ pub(crate) fn pane_details(
     deadline: Instant,
 ) -> Option<PaneDetails> {
     let json = command_stdout_until(herdr_bin, &["agent", "get", pane_id], &[], deadline)?;
-    pane_details_from_get_json(&json, pane_id).ok().flatten()
+    pane_details_from_get_json(&json, pane_id)
+}
+
+/// The workspace, the tab, the terminal title, and the git state a notification
+/// names about its pane, for a notification that is going to be shown.
+pub(crate) fn pane_labels(
+    pane_id: &str,
+    details: PaneDetails,
+    herdr_bin: &str,
+    deadline: Instant,
+) -> PaneLabels {
+    let workspace = workspace_label(pane_id, herdr_bin, deadline);
+    let tab = details
+        .tab_id
+        .as_deref()
+        .and_then(|tab_id| tab_label(tab_id, herdr_bin, deadline));
+    // Without a branch there is nothing to attribute the changes to, so the
+    // git probe is not worth its time: a detached `HEAD` or a directory outside
+    // a repository contributes nothing rather than a bare `+120/-45` that
+    // explains neither where nor what.
+    let git = details.cwd.as_deref().and_then(|cwd| {
+        let branch = worktree_branch(cwd, herdr_bin, deadline)?;
+        Some(crate::git::label(
+            &branch,
+            crate::git::changes(cwd, deadline),
+        ))
+    });
+
+    PaneLabels {
+        workspace,
+        tab,
+        terminal_title: details.terminal_title,
+        git,
+    }
 }
 
 /// The label of the workspace that holds the pane. Like every lookup behind a
 /// notification's text it is best-effort: None when Herdr cannot answer by
 /// `deadline`, and the notification then keeps the event's own copy.
-pub(crate) fn workspace_label(pane_id: &str, herdr_bin: &str, deadline: Instant) -> Option<String> {
-    let workspace = crate::util::workspace_id_from_pane_id(pane_id).unwrap_or("default");
+fn workspace_label(pane_id: &str, herdr_bin: &str, deadline: Instant) -> Option<String> {
     let json = command_stdout_until(herdr_bin, &["workspace", "list"], &[], deadline)?;
-    workspace_label_from_list_json(&json, workspace)
-        .ok()
-        .flatten()
+    workspace_label_from_list_json(&json, workspace_of(pane_id))
 }
 
 /// The label of the tab that holds the pane; an unnamed tab is known by its
 /// number. Best-effort, like `workspace_label`.
-pub(crate) fn tab_label(tab_id: &str, herdr_bin: &str, deadline: Instant) -> Option<String> {
+fn tab_label(tab_id: &str, herdr_bin: &str, deadline: Instant) -> Option<String> {
     let json = command_stdout_until(herdr_bin, &["tab", "get", tab_id], &[], deadline)?;
-    tab_label_from_get_json(&json).ok().flatten()
+    tab_label_from_get_json(&json)
 }
 
 /// The branch the pane's directory is on, from Herdr's own worktree view: it is
@@ -141,23 +181,18 @@ pub(crate) fn tab_label(tab_id: &str, herdr_bin: &str, deadline: Instant) -> Opt
 ///
 /// Best-effort: None outside a worktree, on a detached `HEAD`, or when Herdr
 /// cannot answer by `deadline`.
-pub(crate) fn worktree_branch(cwd: &str, herdr_bin: &str, deadline: Instant) -> Option<String> {
+fn worktree_branch(cwd: &str, herdr_bin: &str, deadline: Instant) -> Option<String> {
     let json = command_stdout_until(
         herdr_bin,
         &["worktree", "list", "--cwd", cwd],
         &[],
         deadline,
     )?;
-    branch_from_worktree_list_json(&json, cwd).ok().flatten()
+    branch_from_worktree_list_json(&json, cwd)
 }
 
-fn branch_from_worktree_list_json(json: &str, cwd: &str) -> Result<Option<String>, String> {
-    let envelope: Envelope<WorktreeListResult> =
-        serde_json::from_str(json).map_err(|err| format!("invalid worktree list json: {err}"))?;
-
-    let Some(result) = envelope.result else {
-        return Ok(None);
-    };
+fn branch_from_worktree_list_json(json: &str, cwd: &str) -> Option<String> {
+    let result: WorktreeListResult = herdr_result(json)?;
     // The branch belongs to the worktree that owns the directory, matched by
     // path rather than by the checkout Herdr resolved the query to:
     // `source_checkout_path` names the repository's main checkout even when the
@@ -179,9 +214,9 @@ fn branch_from_worktree_list_json(json: &str, cwd: &str) -> Result<Option<String
         .max_by_key(|(path, _)| path.as_os_str().len())
         .map(|(_, worktree)| worktree);
 
-    Ok(owner
+    owner
         .filter(|worktree| !worktree.is_detached)
-        .and_then(|worktree| worktree.branch.clone()))
+        .and_then(|worktree| worktree.branch.clone())
 }
 
 /// A path resolved for comparison, falling back to the value as Herdr spelled
@@ -190,16 +225,9 @@ fn canonicalized(path: &str) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
 }
 
-fn pane_details_from_get_json(
-    json: &str,
-    expected_pane_id: &str,
-) -> Result<Option<PaneDetails>, String> {
-    let envelope: Envelope<AgentGetResult> =
-        serde_json::from_str(json).map_err(|err| format!("invalid agent get json: {err}"))?;
-
-    Ok(envelope
-        .result
-        .and_then(|result| result.agent)
+fn pane_details_from_get_json(json: &str, expected_pane_id: &str) -> Option<PaneDetails> {
+    herdr_result::<AgentGetResult>(json)?
+        .agent
         // A stale snapshot can describe a pane Herdr has since replaced. None of
         // it applies then: not its focus, and not its directory, tab or title,
         // which would name another pane on a notification that focuses this one.
@@ -209,42 +237,26 @@ fn pane_details_from_get_json(
             cwd: agent.cwd,
             tab_id: agent.tab_id,
             terminal_title: agent.terminal_title_stripped,
-        }))
+        })
 }
 
-fn tab_label_from_get_json(json: &str) -> Result<Option<String>, String> {
-    let envelope: Envelope<TabGetResult> =
-        serde_json::from_str(json).map_err(|err| format!("invalid tab get json: {err}"))?;
+fn tab_label_from_get_json(json: &str) -> Option<String> {
+    let tab = herdr_result::<TabGetResult>(json)?.tab?;
 
     // Herdr already labels an unnamed tab with its number, as the sidebar
     // shows it; the number stands in should a reply ever leave the label out,
     // since it is what tells two unnamed tabs of one workspace apart.
-    Ok(envelope
-        .result
-        .and_then(|result| result.tab)
-        .and_then(|tab| {
-            tab.label
-                .filter(|label| !label.trim().is_empty())
-                .or_else(|| tab.number.map(|number| number.to_string()))
-        }))
+    tab.label
+        .filter(|label| !label.trim().is_empty())
+        .or_else(|| tab.number.map(|number| number.to_string()))
 }
 
-fn workspace_label_from_list_json(
-    json: &str,
-    workspace_id: &str,
-) -> Result<Option<String>, String> {
-    let envelope: Envelope<WorkspaceListResult> =
-        serde_json::from_str(json).map_err(|err| format!("invalid workspace list json: {err}"))?;
-
-    Ok(envelope
-        .result
-        .and_then(|result| {
-            result
-                .workspaces
-                .into_iter()
-                .find(|workspace| workspace.workspace_id == workspace_id)
-        })
-        .and_then(|workspace| workspace.label))
+fn workspace_label_from_list_json(json: &str, workspace_id: &str) -> Option<String> {
+    herdr_result::<WorkspaceListResult>(json)?
+        .workspaces
+        .into_iter()
+        .find(|workspace| workspace.workspace_id == workspace_id)?
+        .label
 }
 
 /// Activates the workspace's bound terminal and focuses the target pane.
@@ -254,7 +266,7 @@ fn workspace_label_from_list_json(
 /// here at click time because generated notification scripts can outlive the
 /// state that existed when they were written.
 pub(crate) fn focus_pane(pane_id: &str) -> Result<(), String> {
-    let workspace = crate::util::workspace_id_from_pane_id(pane_id).unwrap_or("default");
+    let workspace = workspace_of(pane_id);
     let Some(bound_terminal) = crate::state::remembered_terminal(workspace) else {
         return Ok(());
     };
@@ -369,10 +381,8 @@ pub(crate) fn notification_decision(pane_id: &str, focused: bool) -> Notificatio
     if !focused {
         return NotificationDecision::Send;
     }
-    let workspace = crate::util::workspace_id_from_pane_id(pane_id).unwrap_or("default");
-    notification_decision_from_focus_and_bundles(
-        focused,
-        crate::state::remembered_terminal(workspace),
+    notification_decision_from_bundles(
+        crate::state::remembered_terminal(workspace_of(pane_id)),
         frontmost_bundle_id(),
     )
 }
@@ -454,15 +464,14 @@ fn bundle_id_from_lsappinfo(output: &str) -> Option<String> {
 
 fn focused_pane_id(herdr_bin: &str) -> Option<String> {
     let json = command_stdout(herdr_bin, &["pane", "list"])?;
-    focused_pane_id_from_pane_list_json(&json).ok().flatten()
+    focused_pane_id_from_pane_list_json(&json)
 }
 
-fn focused_pane_id_from_pane_list_json(json: &str) -> Result<Option<String>, String> {
-    let envelope: Envelope<PaneListResult> =
-        serde_json::from_str(json).map_err(|err| format!("invalid pane list json: {err}"))?;
-
-    Ok(envelope.result.and_then(|result| {
-        result.panes.into_iter().find_map(|agent| {
+fn focused_pane_id_from_pane_list_json(json: &str) -> Option<String> {
+    herdr_result::<PaneListResult>(json)?
+        .panes
+        .into_iter()
+        .find_map(|agent| {
             if !agent.focused {
                 return None;
             }
@@ -471,7 +480,6 @@ fn focused_pane_id_from_pane_list_json(json: &str) -> Result<Option<String>, Str
                 .map(|pane_id| pane_id.trim().to_string())
                 .filter(|pane_id| !pane_id.is_empty())
         })
-    }))
 }
 
 /// The workspaces that currently exist, derived from `herdr pane list`.
@@ -481,43 +489,29 @@ fn focused_pane_id_from_pane_list_json(json: &str) -> Result<Option<String>, Str
 /// an empty world — e.g. right after Herdr itself started.
 pub(crate) fn live_workspace_ids(herdr_bin: &str) -> Option<Vec<String>> {
     let json = command_stdout(herdr_bin, &["pane", "list"])?;
-    let live = live_workspace_ids_from_pane_list_json(&json)
-        .ok()
-        .flatten()?;
-    if live.is_empty() {
-        return None;
-    }
-    Some(live)
+    live_workspace_ids_from_pane_list_json(&json)
 }
 
-fn live_workspace_ids_from_pane_list_json(json: &str) -> Result<Option<Vec<String>>, String> {
-    let envelope: Envelope<PaneListResult> =
-        serde_json::from_str(json).map_err(|err| format!("invalid pane list json: {err}"))?;
-
+fn live_workspace_ids_from_pane_list_json(json: &str) -> Option<Vec<String>> {
     let mut seen: Vec<String> = Vec::new();
-    if let Some(result) = envelope.result {
-        for agent in result.panes {
-            if let Some(pane_id) = agent.pane_id {
-                if let Some(workspace) = crate::util::workspace_id_from_pane_id(pane_id.trim()) {
-                    if !seen.iter().any(|value| value == workspace) {
-                        seen.push(workspace.to_string());
-                    }
+    for agent in herdr_result::<PaneListResult>(json)?.panes {
+        if let Some(pane_id) = agent.pane_id {
+            if let Some(workspace) = crate::util::workspace_id_from_pane_id(pane_id.trim()) {
+                if !seen.iter().any(|value| value == workspace) {
+                    seen.push(workspace.to_string());
                 }
             }
         }
     }
-    Ok((!seen.is_empty()).then_some(seen))
+    (!seen.is_empty()).then_some(seen)
 }
 
-fn notification_decision_from_focus_and_bundles(
-    pane_is_focused: bool,
+/// The decision for a pane Herdr calls focused: whether the user can see it
+/// depends on the frontmost app being the terminal bound to its workspace.
+fn notification_decision_from_bundles(
     bound_terminal: Option<String>,
     frontmost: Option<String>,
 ) -> NotificationDecision {
-    if !pane_is_focused {
-        return NotificationDecision::Send;
-    }
-
     match (frontmost, bound_terminal) {
         (Some(frontmost), Some(bound)) if frontmost == bound => NotificationDecision::Skip,
         (Some(_), Some(_)) => NotificationDecision::SendWithVisibilityMonitor,
@@ -534,7 +528,7 @@ mod tests {
         let json = r#"{"result":{"agent":{"focused":true,"pane_id":"w1:p3",
             "cwd":"/tmp/repo","tab_id":"w1:t7","terminal_title_stripped":"Tidy up the parser tests"}}}"#;
 
-        let details = pane_details_from_get_json(json, "w1:p3").unwrap().unwrap();
+        let details = pane_details_from_get_json(json, "w1:p3").unwrap();
 
         assert!(details.focused);
         assert_eq!(details.cwd.as_deref(), Some("/tmp/repo"));
@@ -545,12 +539,10 @@ mod tests {
         );
         // The report has to describe the pane that was asked about, or none of
         // it is used.
-        assert!(pane_details_from_get_json(json, "w1:p9").unwrap().is_none());
+        assert!(pane_details_from_get_json(json, "w1:p9").is_none());
         let without_pane_id = r#"{"result":{"agent":{"focused":true,"cwd":"/tmp/repo"}}}"#;
-        assert!(pane_details_from_get_json(without_pane_id, "w1:p3")
-            .unwrap()
-            .is_none());
-        assert!(pane_details_from_get_json("not json", "w1:p3").is_err());
+        assert!(pane_details_from_get_json(without_pane_id, "w1:p3").is_none());
+        assert!(pane_details_from_get_json("not json", "w1:p3").is_none());
     }
 
     #[test]
@@ -575,69 +567,48 @@ mod tests {
         }"#;
 
         assert_eq!(
-            branch_from_worktree_list_json(json, "/repo")
-                .unwrap()
-                .as_deref(),
+            branch_from_worktree_list_json(json, "/repo").as_deref(),
             Some("main")
         );
         // A directory below the worktree root still belongs to that worktree.
         assert_eq!(
-            branch_from_worktree_list_json(json, "/repo/src/deep")
-                .unwrap()
-                .as_deref(),
+            branch_from_worktree_list_json(json, "/repo/src/deep").as_deref(),
             Some("main")
         );
         // A linked worktree reports its own branch, not the main checkout's.
         assert_eq!(
-            branch_from_worktree_list_json(json, "/worktrees/api")
-                .unwrap()
-                .as_deref(),
+            branch_from_worktree_list_json(json, "/worktrees/api").as_deref(),
             Some("feature/api")
         );
         // The nested worktree wins over the checkout it sits inside, and it is
         // detached, so there is no branch to show.
         assert_eq!(
-            branch_from_worktree_list_json(json, "/repo/.tools/worktrees/spike").unwrap(),
+            branch_from_worktree_list_json(json, "/repo/.tools/worktrees/spike"),
             None
         );
         // A directory outside every worktree has no branch either.
-        assert_eq!(
-            branch_from_worktree_list_json(json, "/elsewhere").unwrap(),
-            None
-        );
+        assert_eq!(branch_from_worktree_list_json(json, "/elsewhere"), None);
     }
 
     #[test]
     fn reads_the_tab_label_from_tab_get_json() {
         let json = r#"{"result":{"tab":{"label":"status","number":7}}}"#;
 
-        assert_eq!(
-            tab_label_from_get_json(json).unwrap().as_deref(),
-            Some("status")
-        );
+        assert_eq!(tab_label_from_get_json(json).as_deref(), Some("status"));
         // An unnamed tab is known by its number.
         assert_eq!(
-            tab_label_from_get_json(r#"{"result":{"tab":{"label":"7","number":7}}}"#)
-                .unwrap()
-                .as_deref(),
+            tab_label_from_get_json(r#"{"result":{"tab":{"label":"7","number":7}}}"#).as_deref(),
             Some("7")
         );
         assert_eq!(
-            tab_label_from_get_json(r#"{"result":{"tab":{"number":7}}}"#)
-                .unwrap()
-                .as_deref(),
+            tab_label_from_get_json(r#"{"result":{"tab":{"number":7}}}"#).as_deref(),
             Some("7")
         );
         assert_eq!(
-            tab_label_from_get_json(r#"{"result":{"tab":{"label":" ","number":7}}}"#)
-                .unwrap()
-                .as_deref(),
+            tab_label_from_get_json(r#"{"result":{"tab":{"label":" ","number":7}}}"#).as_deref(),
             Some("7")
         );
-        assert_eq!(
-            tab_label_from_get_json(r#"{"result":{"tab":{}}}"#).unwrap(),
-            None
-        );
+        assert_eq!(tab_label_from_get_json(r#"{"result":{"tab":{}}}"#), None);
     }
 
     #[test]
@@ -647,13 +618,11 @@ mod tests {
             {"workspace_id":"w2"}]}}"#;
 
         assert_eq!(
-            workspace_label_from_list_json(json, "w1")
-                .unwrap()
-                .as_deref(),
+            workspace_label_from_list_json(json, "w1").as_deref(),
             Some("sample-repo")
         );
-        assert_eq!(workspace_label_from_list_json(json, "w2").unwrap(), None);
-        assert_eq!(workspace_label_from_list_json(json, "w9").unwrap(), None);
+        assert_eq!(workspace_label_from_list_json(json, "w2"), None);
+        assert_eq!(workspace_label_from_list_json(json, "w9"), None);
     }
 
     #[test]
@@ -669,7 +638,7 @@ mod tests {
         }"#;
 
         assert_eq!(
-            focused_pane_id_from_pane_list_json(json).unwrap(),
+            focused_pane_id_from_pane_list_json(json),
             Some("w1:p2".to_string())
         );
     }
@@ -688,21 +657,20 @@ mod tests {
         }"#;
 
         assert_eq!(
-            live_workspace_ids_from_pane_list_json(json).unwrap(),
+            live_workspace_ids_from_pane_list_json(json),
             Some(vec!["w1".to_string(), "w2".to_string()])
         );
 
         // No panes at all is untrustworthy for pruning.
         let empty = r#"{"id":"cli:pane:list","result":{"panes":[]}}"#;
-        assert_eq!(live_workspace_ids_from_pane_list_json(empty).unwrap(), None);
+        assert_eq!(live_workspace_ids_from_pane_list_json(empty), None);
     }
 
     #[test]
     fn decides_when_to_skip_or_monitor_notifications() {
         // Pane focused + frontmost matches the bound terminal -> skip.
         assert_eq!(
-            notification_decision_from_focus_and_bundles(
-                true,
+            notification_decision_from_bundles(
                 Some("com.example.Herdr".to_string()),
                 Some("com.example.Herdr".to_string())
             ),
@@ -710,8 +678,7 @@ mod tests {
         );
         // Pane focused + frontmost matches the workspace binding -> skip.
         assert_eq!(
-            notification_decision_from_focus_and_bundles(
-                true,
+            notification_decision_from_bundles(
                 Some("com.googlecode.iterm2".to_string()),
                 Some("com.googlecode.iterm2".to_string())
             ),
@@ -720,8 +687,7 @@ mod tests {
         // Pane focused + frontmost outside the bound terminal -> notify, with
         // a visibility monitor since a terminal is bound.
         assert_eq!(
-            notification_decision_from_focus_and_bundles(
-                true,
+            notification_decision_from_bundles(
                 Some("com.example.Herdr".to_string()),
                 Some("com.apple.Terminal".to_string())
             ),
@@ -730,8 +696,7 @@ mod tests {
         // Pane focused + frontmost is a non-terminal app and a terminal is
         // bound -> notify with a visibility monitor so it auto-dismisses.
         assert_eq!(
-            notification_decision_from_focus_and_bundles(
-                true,
+            notification_decision_from_bundles(
                 Some("com.example.Herdr".to_string()),
                 Some("com.google.Chrome".to_string())
             ),
@@ -739,29 +704,12 @@ mod tests {
         );
         // Pane focused + frontmost with no bound terminal -> notify.
         assert_eq!(
-            notification_decision_from_focus_and_bundles(
-                true,
-                None,
-                Some("com.google.Chrome".to_string())
-            ),
+            notification_decision_from_bundles(None, Some("com.google.Chrome".to_string())),
             NotificationDecision::Send
         );
         // Pane focused + frontmost unknown -> notify (conservative).
         assert_eq!(
-            notification_decision_from_focus_and_bundles(
-                true,
-                Some("com.example.Herdr".to_string()),
-                None
-            ),
-            NotificationDecision::Send
-        );
-        // Pane not focused -> notify.
-        assert_eq!(
-            notification_decision_from_focus_and_bundles(
-                false,
-                Some("com.example.Herdr".to_string()),
-                Some("com.example.Herdr".to_string())
-            ),
+            notification_decision_from_bundles(Some("com.example.Herdr".to_string()), None),
             NotificationDecision::Send
         );
     }

@@ -23,7 +23,7 @@ const BRANCH_HEAD_CHARS: usize = 12;
 /// Both counts can be zero on a dirty tree. A binary file or an executable bit
 /// changes no text lines, so the counts describe the size of the change and
 /// never decide whether there is one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Changes {
     pub(crate) inserted: usize,
     pub(crate) deleted: usize,
@@ -90,10 +90,7 @@ fn changes_from_shortstat(shortstat: &str) -> Option<Changes> {
         return None;
     }
 
-    let mut changes = Changes {
-        inserted: 0,
-        deleted: 0,
-    };
+    let mut changes = Changes::default();
     for clause in shortstat.split(',') {
         let clause = clause.trim();
         let Some(count) = clause
