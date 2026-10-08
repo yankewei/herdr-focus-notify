@@ -82,7 +82,7 @@ listen_on unix:/tmp/kitty
 
 In other terminals, or in kitty without these settings, the click only activates the terminal app, and macOS decides which window comes forward.
 
-Blocked notifications say that the agent needs your input and prompt you to review and respond. Done notifications say that the agent finished and prompt you to review the result. The plugin does not read or summarize pane contents.
+The notification is laid out like the Agent sidebar's own rows: the title is `{state} · {workspace} · {tab}`, the subtitle is the agent followed by the pane's git state, and the message is the pane's terminal title. The git state uses the short form shell prompts and diffstats share: `main* · +120/-45` means branch `main`, uncommitted changes, 120 lines inserted and 45 deleted versus `HEAD` (untracked files are not counted). Changes that touch no text lines, such as a binary file or an executable bit, show as `main*` alone. A branch long enough to push the counts off the subtitle's one line is middle-truncated. When Herdr reports no title, the message falls back to the status: blocked agents prompt you to review and respond, done agents prompt you to review the result. The plugin never reads or summarizes pane contents, and never asks Herdr to explain its detection.
 
 When you manually focus the matching pane in Herdr while its terminal is frontmost, its pending notification is removed.
 

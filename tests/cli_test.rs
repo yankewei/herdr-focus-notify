@@ -237,23 +237,28 @@ fn test_mode_notifies_even_when_pane_is_visible_and_status_filtered() {
 
 #[cfg(unix)]
 #[test]
-fn normal_notification_uses_status_specific_copy_without_requesting_an_explanation() {
+fn normal_notification_names_the_pane_and_never_requests_an_explanation() {
     let temp_dir = temp_test_dir();
 
     let herdr = temp_dir.join("herdr");
     write_executable(
         &herdr,
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDR_LOG\"\nif [ \"$2\" = \"get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":false,\"pane_id\":\"w1:p2\"}}}'\nfi\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDR_LOG\"\nif [ \"$1 $2\" = \"agent get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":false,\"pane_id\":\"w1:p2\",\"cwd\":\"/worktrees/api/src\",\"tab_id\":\"w1:t7\",\"terminal_title_stripped\":\"Tidy up the parser tests\"}}}'\nelif [ \"$1 $2\" = \"tab get\" ]; then\n  printf '%s\\n' '{\"result\":{\"tab\":{\"label\":\"status\",\"number\":7}}}'\nelif [ \"$1 $2\" = \"workspace list\" ]; then\n  printf '%s\\n' '{\"result\":{\"workspaces\":[{\"workspace_id\":\"w1\",\"label\":\"sample-repo\"}]}}'\nelif [ \"$1 $2\" = \"worktree list\" ]; then\n  printf '%s\\n' '{\"result\":{\"source\":{\"repo_root\":\"/repo\",\"source_checkout_path\":\"/repo\"},\"worktrees\":[{\"branch\":\"main\",\"is_detached\":false,\"path\":\"/repo\"},{\"branch\":\"feature/api\",\"is_detached\":false,\"path\":\"/worktrees/api\"}]}}'\nfi\n",
     );
 
-    let notifier = temp_dir.join("alerter");
+    // The git probe is faked as well, so the test can hold the two properties
+    // that keep it from interfering with an agent working in the same
+    // repository: it never takes the index lock, and it parses a summary line
+    // git is forced to print in English.
+    let git = temp_dir.join("git");
     write_executable(
-        &notifier,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NOTIFIER_LOG.tmp\"\nmv \"$NOTIFIER_LOG.tmp\" \"$NOTIFIER_LOG\"\n",
+        &git,
+        "#!/bin/sh\nprintf '%s LC_ALL=%s\\n' \"$*\" \"$LC_ALL\" >> \"$GIT_LOG\"\nprintf ' 2 files changed, 4 insertions(+), 4 deletions(-)\\n'\n",
     );
 
-    let notifier_log = temp_dir.join("notifier.log");
+    let notifier_log = write_logging_notifier(&temp_dir);
     let herdr_log = temp_dir.join("herdr.log");
+    let git_log = temp_dir.join("git.log");
     let path = path_with_temp_dir(&temp_dir);
     let output = binary()
         .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
@@ -265,6 +270,7 @@ fn normal_notification_uses_status_specific_copy_without_requesting_an_explanati
         .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
         .env("NOTIFIER_LOG", &notifier_log)
         .env("HERDR_LOG", &herdr_log)
+        .env("GIT_LOG", &git_log)
         .env("PATH", path)
         .output()
         .unwrap();
@@ -272,21 +278,137 @@ fn normal_notification_uses_status_specific_copy_without_requesting_an_explanati
     assert!(output.status.success());
     // The notifier runs in a detached script. The fake notifier renames its
     // log into place, so the file appears only once all arguments are written.
-    let mut notifier_output = String::new();
-    for _ in 0..500 {
-        notifier_output = fs::read_to_string(&notifier_log).unwrap_or_default();
-        if !notifier_output.is_empty() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let notifier_output = wait_for_notifier_output(&notifier_log);
 
-    assert!(notifier_output.contains("Codex needs your input"));
-    assert!(notifier_output.contains("Open the pane to review and respond."));
+    assert!(notifier_output.contains("Blocked · sample-repo · status"));
+    // The pane's terminal title is the message; the event's own title is not
+    // shown next to it.
+    assert!(notifier_output.contains("Tidy up the parser tests"));
     assert!(!notifier_output.contains("Implement plugin"));
+    assert!(notifier_output.contains("--subtitle"));
+    // The pane sits in a linked worktree, so the branch is that worktree's,
+    // not the `main` of the checkout Herdr reports as the source.
+    assert!(notifier_output.contains("Codex · feature/api* · +4/-4"));
+    // The counts must come from a probe that leaves the index alone and cannot
+    // be confused by a translated git.
+    let git_log = fs::read_to_string(&git_log).unwrap_or_default();
+    assert!(git_log.contains("--no-optional-locks"), "{git_log}");
+    assert!(git_log.contains("LC_ALL=C"), "{git_log}");
     assert!(!fs::read_to_string(&herdr_log)
         .unwrap_or_default()
         .contains("explain"));
+    wait_for_detached_notifier(&temp_dir.join("state"));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hanging_worktree_lookup_delays_the_notification_by_the_budget_at_most() {
+    let temp_dir = temp_test_dir();
+
+    // `worktree list` never answers in time. The trailing `:` keeps the shell
+    // from exec-ing into `sleep`, so the hang is a descendant holding stdout.
+    let herdr = temp_dir.join("herdr");
+    write_executable(
+        &herdr,
+        "#!/bin/sh\nif [ \"$1 $2\" = \"agent get\" ]; then\n  printf '%s\\n' '{\"result\":{\"agent\":{\"focused\":false,\"pane_id\":\"w1:p2\",\"cwd\":\"/worktrees/api/src\",\"tab_id\":\"w1:t7\",\"terminal_title_stripped\":\"Tidy up the parser tests\"}}}'\nelif [ \"$1 $2\" = \"tab get\" ]; then\n  printf '%s\\n' '{\"result\":{\"tab\":{\"label\":\"status\",\"number\":7}}}'\nelif [ \"$1 $2\" = \"workspace list\" ]; then\n  printf '%s\\n' '{\"result\":{\"workspaces\":[{\"workspace_id\":\"w1\",\"label\":\"sample-repo\"}]}}'\nelif [ \"$1 $2\" = \"worktree list\" ]; then\n  sleep 30; :\nfi\n",
+    );
+
+    let git = temp_dir.join("git");
+    write_executable(
+        &git,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$GIT_LOG\"\nprintf ' 2 files changed, 4 insertions(+), 4 deletions(-)\\n'\n",
+    );
+
+    let notifier_log = write_logging_notifier(&temp_dir);
+    let git_log = temp_dir.join("git.log");
+    let path = path_with_temp_dir(&temp_dir);
+    let started = std::time::Instant::now();
+    let output = binary()
+        .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"blocked","agent":"Codex"}}"#,
+        )
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("NOTIFIER_LOG", &notifier_log)
+        .env("GIT_LOG", &git_log)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+    let notifier_output = wait_for_notifier_output(&notifier_log);
+
+    // What answered in time is still shown; the branch is dropped, and with it
+    // the git probe, which has no branch to attribute changes to.
+    assert!(notifier_output.contains("Blocked · sample-repo · status"));
+    assert!(notifier_output.contains("Tidy up the parser tests"));
+    assert!(
+        notifier_output.contains("--subtitle=Codex\n"),
+        "{notifier_output}"
+    );
+    assert!(!git_log.exists());
+    wait_for_detached_notifier(&temp_dir.join("state"));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hanging_agent_lookup_still_sends_the_notification_within_the_budget() {
+    let temp_dir = temp_test_dir();
+
+    // `agent get` decides whether to notify at all, and it never answers in
+    // time. Every other call would answer at once, but the budget is spent.
+    let herdr = temp_dir.join("herdr");
+    write_executable(
+        &herdr,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDR_LOG\"\nif [ \"$1 $2\" = \"agent get\" ]; then\n  sleep 30; :\nelif [ \"$1 $2\" = \"workspace list\" ]; then\n  printf '%s\\n' '{\"result\":{\"workspaces\":[{\"workspace_id\":\"w1\",\"label\":\"sample-repo\"}]}}'\nfi\n",
+    );
+
+    let notifier_log = write_logging_notifier(&temp_dir);
+    let herdr_log = temp_dir.join("herdr.log");
+    let path = path_with_temp_dir(&temp_dir);
+    let started = std::time::Instant::now();
+    let output = binary()
+        .env("HERDR_PLUGIN_EVENT", "pane.agent_status_changed")
+        .env(
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p2","agent_status":"blocked","agent":"Codex"}}"#,
+        )
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_PLUGIN_STATE_DIR", temp_dir.join("state"))
+        .env("NOTIFIER_LOG", &notifier_log)
+        .env("HERDR_LOG", &herdr_log)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+    let notifier_output = wait_for_notifier_output(&notifier_log);
+
+    // An unknown focus sends rather than skips, with the event's own copy; the
+    // lookups behind the text are skipped, since the budget is already spent.
+    assert!(
+        notifier_output.contains("--title=Blocked\n"),
+        "{notifier_output}"
+    );
+    assert!(notifier_output.contains("Open the pane to review and respond."));
+    assert_eq!(
+        fs::read_to_string(&herdr_log).unwrap_or_default(),
+        "agent get w1:p2\n"
+    );
     wait_for_detached_notifier(&temp_dir.join("state"));
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -388,6 +510,30 @@ fn wait_for_detached_notifier(state_dir: &Path) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     panic!("detached notifier script did not finish");
+}
+
+/// Installs a fake `alerter` that records its arguments, one per line, and
+/// returns the log it writes; `NOTIFIER_LOG` has to point the plugin at it.
+#[cfg(unix)]
+fn write_logging_notifier(temp_dir: &Path) -> PathBuf {
+    write_executable(
+        &temp_dir.join("alerter"),
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$NOTIFIER_LOG.tmp\"\nmv \"$NOTIFIER_LOG.tmp\" \"$NOTIFIER_LOG\"\n",
+    );
+    temp_dir.join("notifier.log")
+}
+
+/// The arguments the detached notifier was called with, once it has run.
+#[cfg(unix)]
+fn wait_for_notifier_output(notifier_log: &Path) -> String {
+    for _ in 0..500 {
+        let output = fs::read_to_string(notifier_log).unwrap_or_default();
+        if !output.is_empty() {
+            return output;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    String::new()
 }
 
 #[cfg(unix)]
