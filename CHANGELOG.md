@@ -2,6 +2,16 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
+## [0.8.0] - 2026-10-08
+
+### Added
+
+- Notifications name the pane the way the Agent sidebar does. The title is `{state} · {workspace label} · {tab label}`, the subtitle is the agent plus the pane's git state (`branch* · +inserted/-deleted`), and the message is the pane's terminal title. An unnamed tab is shown by its number, and a long branch is middle-truncated so the counts stay on the subtitle's single line.
+
+### Changed
+
+- The lookups behind a notification share one 2-second budget. A slow Herdr or a pathological repository delays the notification by that much at most, and it goes out with whatever was answered in time; any field left unanswered keeps the event's own text.
+
 ## [0.7.2] - 2026-09-26
 
 ### Fixed
