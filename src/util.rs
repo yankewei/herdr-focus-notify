@@ -140,6 +140,12 @@ pub(crate) fn workspace_id_from_pane_id(pane_id: &str) -> Option<&str> {
     pane_id.split(':').next().filter(|value| !value.is_empty())
 }
 
+/// The workspace a pane's terminal binding and labels are keyed by: the
+/// workspace part of its id, or `default` for an id without one.
+pub(crate) fn workspace_of(pane_id: &str) -> &str {
+    workspace_id_from_pane_id(pane_id).unwrap_or("default")
+}
+
 pub(crate) fn shell_quote(value: &str) -> String {
     let mut quoted = String::from("'");
     for ch in value.chars() {
