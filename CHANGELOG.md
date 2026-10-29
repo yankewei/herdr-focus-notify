@@ -8,6 +8,10 @@ All notable changes to `herdr-focus-notify` are documented here.
 
 - A `LICENSE` file with the MIT License text, matching the `license = "MIT"` that `Cargo.toml` has always declared.
 
+### Fixed
+
+- With more than one Herdr session open (for example `herdr --session work` beside the default one), clicking a notification from one session could do nothing. All sessions share one state directory, and a notification from one session pruned every terminal binding for workspaces it did not have itself, which removed the other sessions' bindings. Workspace ids are also only unique within a session, so two sessions could overwrite each other's binding for the same id. Bindings in `terminal-memory.json` are now kept per session, keyed by the session's `HERDR_SOCKET_PATH`, and a session prunes only its own. Bindings saved by earlier versions are not carried over: focus a pane once in each workspace to save them again.
+
 ## [0.8.0] - 2026-10-08
 
 ### Added

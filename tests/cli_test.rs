@@ -13,8 +13,12 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Running the suite inside Herdr would otherwise leak the shell's session
+/// socket into every test; tests that need one set it themselves.
 fn binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_herdr-focus-notify"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-focus-notify"));
+    command.env_remove("HERDR_SOCKET_PATH");
+    command
 }
 
 #[test]
@@ -117,7 +121,7 @@ fn focus_event_learns_terminal_from_cfbundleidentifier() {
     );
     assert_eq!(
         fs::read_to_string(state_dir.join("terminal-memory.json")).unwrap(),
-        r#"{"workspaces":{"w1":"com.mitchellh.ghostty"}}"#
+        terminal_memory_json("", "w1", "com.mitchellh.ghostty")
     );
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -635,7 +639,6 @@ fn focus_socket(expected_pane_id: &str, response: &str) -> (PathBuf, std::thread
 fn focus_click_targets_an_arbitrary_pane_through_the_socket_api() {
     let temp_dir = temp_test_dir();
     let open_log = temp_dir.join("open.log");
-    write_terminal_binding(&temp_dir.join("state"), "w2", "com.example.terminal");
     write_executable(
         &temp_dir.join("open"),
         "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$OPEN_LOG\"\n",
@@ -643,6 +646,12 @@ fn focus_click_targets_an_arbitrary_pane_through_the_socket_api() {
     let (socket_path, socket_handle) = focus_socket(
         "w2:p7",
         r#"{"id":"herdr-focus-notify:focus","result":{"type":"pane_info","pane":{"pane_id":"w2:p7","workspace_id":"w2"}}}"#,
+    );
+    write_terminal_binding(
+        &temp_dir.join("state"),
+        &socket_path,
+        "w2",
+        "com.example.terminal",
     );
     let output = binary()
         .args(["--focus-pane", "w2:p7"])
@@ -669,7 +678,12 @@ fn focus_click_targets_an_arbitrary_pane_through_the_socket_api() {
 #[test]
 fn focus_click_reports_a_missing_plugin_socket() {
     let temp_dir = temp_test_dir();
-    write_terminal_binding(&temp_dir.join("state"), "w2", "com.example.terminal");
+    write_terminal_binding(
+        &temp_dir.join("state"),
+        Path::new(""),
+        "w2",
+        "com.example.terminal",
+    );
     write_executable(&temp_dir.join("open"), "#!/bin/sh\nexit 0\n");
 
     let output = binary()
@@ -690,7 +704,6 @@ fn focus_click_reports_a_missing_plugin_socket() {
 #[test]
 fn focus_click_reports_socket_api_failures() {
     let temp_dir = temp_test_dir();
-    write_terminal_binding(&temp_dir.join("state"), "w2", "com.example.terminal");
     write_executable(&temp_dir.join("open"), "#!/bin/sh\nexit 0\n");
     for (response, expected) in [
         (
@@ -704,6 +717,12 @@ fn focus_click_reports_socket_api_failures() {
         ),
     ] {
         let (socket_path, socket_handle) = focus_socket("w2:p7", response);
+        write_terminal_binding(
+            &temp_dir.join("state"),
+            &socket_path,
+            "w2",
+            "com.example.terminal",
+        );
         let output = binary()
             .args(["--focus-pane", "w2:p7"])
             .env("HERDR_SOCKET_PATH", &socket_path)
@@ -723,10 +742,15 @@ fn focus_click_reports_socket_api_failures() {
 #[test]
 fn focus_click_reports_a_socket_that_never_answers() {
     let temp_dir = temp_test_dir();
-    write_terminal_binding(&temp_dir.join("state"), "w2", "com.example.terminal");
     write_executable(&temp_dir.join("open"), "#!/bin/sh\nexit 0\n");
 
     let socket_path = unique_socket_path();
+    write_terminal_binding(
+        &temp_dir.join("state"),
+        &socket_path,
+        "w2",
+        "com.example.terminal",
+    );
     let listener = UnixListener::bind(&socket_path).unwrap();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_in_thread = stop.clone();
@@ -780,7 +804,6 @@ fn notification_content_click_runs_the_focus_helper() {
     let herdr = temp_dir.join("herdr");
     let notifier_log = temp_dir.join("notifier.log");
     let open_log = temp_dir.join("open.log");
-    write_terminal_binding(&temp_dir.join("state"), "w2", "com.example.terminal");
     write_executable(
         &herdr,
         r#"#!/bin/sh
@@ -803,6 +826,12 @@ esac
     let (socket_path, socket_handle) = focus_socket(
         "w2:p7",
         r#"{"id":"herdr-focus-notify:focus","result":{"type":"pane_info","pane":{"pane_id":"w2:p7","workspace_id":"w2"}}}"#,
+    );
+    write_terminal_binding(
+        &temp_dir.join("state"),
+        &socket_path,
+        "w2",
+        "com.example.terminal",
     );
     let output = binary()
         .arg("--test")
@@ -867,7 +896,6 @@ fn notification_focus_does_not_overwrite_existing_terminal_binding() {
     let temp_dir = temp_test_dir();
     let state_dir = temp_dir.join("state");
     let frontmost_state = temp_dir.join("frontmost");
-    write_terminal_binding(&state_dir, "w1", "com.mitchellh.ghostty");
     fs::write(&frontmost_state, "com.example.notification-app\n").unwrap();
     write_state_frontmost(&temp_dir);
     write_executable(&temp_dir.join("open"), "#!/bin/sh\nexit 0\n");
@@ -875,6 +903,7 @@ fn notification_focus_does_not_overwrite_existing_terminal_binding() {
         "w1:p2",
         r#"{"id":"herdr-focus-notify:focus","result":{"type":"pane_info","pane":{"pane_id":"w1:p2","workspace_id":"w1"}}}"#,
     );
+    write_terminal_binding(&state_dir, &socket_path, "w1", "com.mitchellh.ghostty");
 
     let focus = binary()
         .args(["--focus-pane", "w1:p2"])
@@ -892,6 +921,7 @@ fn notification_focus_does_not_overwrite_existing_terminal_binding() {
     );
 
     let event = binary()
+        .env("HERDR_SOCKET_PATH", &socket_path)
         .env("HERDR_PLUGIN_STATE_DIR", &state_dir)
         .env("HERDR_PLUGIN_EVENT", "pane.focused")
         .env(
@@ -910,7 +940,83 @@ fn notification_focus_does_not_overwrite_existing_terminal_binding() {
 
     assert_eq!(
         fs::read_to_string(state_dir.join("terminal-memory.json")).unwrap(),
-        r#"{"workspaces":{"w1":"com.mitchellh.ghostty"}}"#
+        terminal_memory_json(
+            &socket_path.to_string_lossy(),
+            "w1",
+            "com.mitchellh.ghostty"
+        )
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn sessions_learn_and_prune_their_own_terminal_bindings() {
+    let temp_dir = temp_test_dir();
+    let state_dir = temp_dir.join("state");
+    let frontmost_state = temp_dir.join("frontmost");
+    let herdr = temp_dir.join("herdr");
+    write_state_frontmost(&temp_dir);
+    write_executable(&temp_dir.join("alerter"), "#!/bin/sh\nexit 0\n");
+    // Session A only has workspace w1, so its prune must not reach session
+    // B's w9, and the two sessions' w1 are different workspaces.
+    write_executable(
+        &herdr,
+        r#"#!/bin/sh
+case "$1 $2" in
+  'pane list'|'agent list') echo '{"result":{"panes":[{"focused":true,"pane_id":"w1:p1"}],"agents":[]}}' ;;
+  *) exit 1 ;;
+esac
+"#,
+    );
+    let focus = |session: &str, pane: &str, bundle_id: &str| {
+        fs::write(&frontmost_state, format!("{bundle_id}\n")).unwrap();
+        let output = binary()
+            .env("HERDR_SOCKET_PATH", session)
+            .env("HERDR_PLUGIN_STATE_DIR", &state_dir)
+            .env("HERDR_PLUGIN_EVENT", "pane.focused")
+            .env(
+                "HERDR_PLUGIN_EVENT_JSON",
+                format!(r#"{{"event":"pane.focused","data":{{"pane_id":"{pane}"}}}}"#),
+            )
+            .env("FRONTMOST_STATE", &frontmost_state)
+            .env("PATH", path_with_temp_dir(&temp_dir))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    focus("/tmp/a/herdr.sock", "w1:p1", "com.mitchellh.ghostty");
+    focus("/tmp/b/herdr.sock", "w1:p4", "com.googlecode.iterm2");
+    focus("/tmp/b/herdr.sock", "w9:p2", "com.googlecode.iterm2");
+
+    let notify = binary()
+        .arg("--test")
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_SOCKET_PATH", "/tmp/a/herdr.sock")
+        .env("HERDR_PLUGIN_STATE_DIR", &state_dir)
+        .env("PATH", path_with_temp_dir(&temp_dir))
+        .output()
+        .unwrap();
+    assert!(
+        notify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&notify.stderr)
+    );
+
+    let memory: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(state_dir.join("terminal-memory.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        memory,
+        serde_json::json!({ "sessions": {
+            "/tmp/a/herdr.sock": { "w1": "com.mitchellh.ghostty" },
+            "/tmp/b/herdr.sock": { "w1": "com.googlecode.iterm2", "w9": "com.googlecode.iterm2" },
+        } })
     );
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -922,7 +1028,7 @@ fn obvious_non_terminal_does_not_overwrite_existing_terminal_binding() {
     let state_dir = temp_dir.join("state");
     let frontmost_state = temp_dir.join("frontmost");
     let herdr = temp_dir.join("herdr");
-    write_terminal_binding(&state_dir, "w1", "com.mitchellh.ghostty");
+    write_terminal_binding(&state_dir, Path::new(""), "w1", "com.mitchellh.ghostty");
     fs::write(&frontmost_state, "com.google.Chrome\n").unwrap();
     write_state_frontmost(&temp_dir);
     write_executable(&herdr, "#!/bin/sh\nexit 0\n");
@@ -947,7 +1053,7 @@ fn obvious_non_terminal_does_not_overwrite_existing_terminal_binding() {
     );
     assert_eq!(
         fs::read_to_string(state_dir.join("terminal-memory.json")).unwrap(),
-        r#"{"workspaces":{"w1":"com.mitchellh.ghostty"}}"#
+        terminal_memory_json("", "w1", "com.mitchellh.ghostty")
     );
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -957,7 +1063,7 @@ fn obvious_non_terminal_does_not_overwrite_existing_terminal_binding() {
 fn clear_terminal_bindings_removes_old_activation_commands() {
     let temp_dir = temp_test_dir();
     let state_dir = temp_dir.join("state");
-    write_terminal_binding(&state_dir, "w1", "com.mitchellh.ghostty");
+    write_terminal_binding(&state_dir, Path::new(""), "w1", "com.mitchellh.ghostty");
     let script = state_dir.join("focus-old.sh");
     fs::write(
         &script,
@@ -982,11 +1088,17 @@ fn clear_terminal_bindings_removes_old_activation_commands() {
 }
 
 #[cfg(unix)]
-fn write_terminal_binding(state_dir: &Path, workspace: &str, bundle_id: &str) {
+fn write_terminal_binding(state_dir: &Path, session: &Path, workspace: &str, bundle_id: &str) {
     fs::create_dir_all(state_dir).unwrap();
     fs::write(
         state_dir.join("terminal-memory.json"),
-        format!(r#"{{"workspaces":{{"{workspace}":"{bundle_id}"}}}}"#),
+        terminal_memory_json(&session.to_string_lossy(), workspace, bundle_id),
     )
     .unwrap();
+}
+
+/// Bindings are keyed by the session's `HERDR_SOCKET_PATH`; runs without one
+/// use the empty key.
+fn terminal_memory_json(session: &str, workspace: &str, bundle_id: &str) -> String {
+    serde_json::json!({ "sessions": { session: { workspace: bundle_id } } }).to_string()
 }

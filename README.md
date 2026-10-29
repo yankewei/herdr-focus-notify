@@ -43,7 +43,7 @@ herdr plugin link .
 
 ### 3. Done — zero configuration
 
-The plugin works with **zero configuration**. The first time you focus a pane in Herdr, the plugin binds the frontmost terminal to that pane's workspace, then uses it to activate the terminal on click and to recognise when you are already looking at a pane. Bindings are per-workspace: switch from kitty to Ghostty and keep working on the same pane, and clicking a notification activates Ghostty. A notification click never changes the binding, even when the browser or another app is frontmost during the click.
+The plugin works with **zero configuration**. The first time you focus a pane in Herdr, the plugin binds the frontmost terminal to that pane's workspace, then uses it to activate the terminal on click and to recognise when you are already looking at a pane. Bindings are per-workspace, and kept separately for each Herdr session: switch from kitty to Ghostty and keep working on the same pane, and clicking a notification activates Ghostty. A notification click never changes the binding, even when the browser or another app is frontmost during the click.
 
 No configuration files needed. The only external dependency is alerter, auto-detected from `PATH` and common Homebrew locations:
 

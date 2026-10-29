@@ -1,14 +1,27 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use serde::{Deserialize, Serialize};
+
 use crate::util::notification_group_id;
 
 const GENERATED_SCRIPT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const TEMP_FILE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const FOCUS_ORIGIN_RETENTION: Duration = Duration::from_secs(15);
+
+type WorkspaceBindings = HashMap<String, String>;
+
+/// Every Herdr session runs its own plugin processes against one shared state
+/// directory, and workspace ids are only unique within a session, so bindings
+/// are kept per session, keyed by the session's API socket.
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct TerminalMemory {
+    sessions: HashMap<String, WorkspaceBindings>,
+}
 
 pub(crate) fn plugin_state_dir() -> PathBuf {
     env::var_os("HERDR_PLUGIN_STATE_DIR")
@@ -22,14 +35,16 @@ pub(crate) fn plugin_state_dir() -> PathBuf {
 pub(crate) fn remember_terminal(workspace: &str, bundle_id: &str) -> io::Result<()> {
     let state_dir = plugin_state_dir();
     fs::create_dir_all(&state_dir)?;
-    remember_terminal_into(&state_dir, workspace, bundle_id)
+    remember_terminal_into(&state_dir, &session_key(), workspace, bundle_id)
 }
 
 /// The terminal bound to a pane's workspace, learned from `pane.focused`
 /// events. `None` until the workspace has been focused at least once or when
 /// the saved bundle id is an obvious non-terminal app.
 pub(crate) fn remembered_terminal(workspace: &str) -> Option<String> {
-    read_terminal_bindings_from(&terminal_memory_path())?
+    read_terminal_memory_from(&terminal_memory_path())
+        .sessions
+        .remove(&session_key())?
         .get(workspace)
         .filter(|bundle_id| !is_obvious_non_terminal_bundle(bundle_id))
         .cloned()
@@ -106,7 +121,7 @@ fn clear_focus_origin_markers() -> io::Result<()> {
     Ok(())
 }
 
-/// Removes bindings for workspaces that no longer exist in Herdr.
+/// Removes this session's bindings for workspaces that no longer exist in it.
 ///
 /// Uses `herdr pane list` to learn the live workspace set; when that cannot
 /// be trusted (command failure or no panes at all) nothing is pruned, so the
@@ -115,67 +130,84 @@ fn clear_focus_origin_markers() -> io::Result<()> {
 /// The rewrite reuses the same atomic write path as learning.
 pub(crate) fn prune_stale_workspace_bindings(herdr_bin: &str) -> io::Result<()> {
     let state_dir = plugin_state_dir();
-    let path = terminal_memory_path();
-    let Some(mut bindings) = read_terminal_bindings_from(&path) else {
+    let mut memory = read_terminal_memory_from(&terminal_memory_path());
+    let session = session_key();
+    if !memory.sessions.contains_key(&session) {
         return Ok(());
-    };
+    }
     let Some(live) = crate::focus::live_workspace_ids(herdr_bin) else {
         return Ok(());
     };
 
-    let before = bindings.len();
-    bindings.retain(|workspace, _| live.iter().any(|id| id == workspace));
-    if bindings.len() == before {
+    if !retain_live_workspaces(&mut memory, &session, &live) {
         return Ok(());
     }
 
     fs::create_dir_all(&state_dir)?;
-    remember_bindings_into(&state_dir, &bindings)
+    write_terminal_memory_into(&state_dir, &memory)
 }
 
-fn remember_bindings_into(
-    dir: &Path,
-    bindings: &std::collections::HashMap<String, String>,
-) -> io::Result<()> {
+/// Drops `session`'s bindings for workspaces missing from `live`, leaving
+/// other sessions untouched. Returns whether anything was dropped.
+fn retain_live_workspaces(memory: &mut TerminalMemory, session: &str, live: &[String]) -> bool {
+    let Some(bindings) = memory.sessions.get_mut(session) else {
+        return false;
+    };
+    let before = bindings.len();
+    bindings.retain(|workspace, _| live.iter().any(|id| id == workspace));
+    let pruned = bindings.len() != before;
+    if bindings.is_empty() {
+        memory.sessions.remove(session);
+    }
+    pruned
+}
+
+fn write_terminal_memory_into(dir: &Path, memory: &TerminalMemory) -> io::Result<()> {
     let path = dir.join("terminal-memory.json");
     let temp_path = dir.join(format!(".terminal-memory-{}.tmp", std::process::id()));
-    let json = serde_json::json!({ "workspaces": bindings });
     fs::write(
         &temp_path,
-        serde_json::to_vec(&json).map_err(io::Error::other)?,
+        serde_json::to_vec(memory).map_err(io::Error::other)?,
     )?;
     fs::rename(temp_path, &path)
 }
 
-fn remember_terminal_into(dir: &Path, workspace: &str, bundle_id: &str) -> io::Result<()> {
-    let path = dir.join("terminal-memory.json");
+fn remember_terminal_into(
+    dir: &Path,
+    session: &str,
+    workspace: &str,
+    bundle_id: &str,
+) -> io::Result<()> {
+    // Read existing bindings so other workspaces and sessions survive the
+    // rewrite.
+    let mut memory = read_terminal_memory_from(&dir.join("terminal-memory.json"));
+    memory
+        .sessions
+        .entry(session.to_string())
+        .or_default()
+        .insert(workspace.to_string(), bundle_id.to_string());
 
-    // Read existing bindings so other workspaces survive the rewrite.
-    let mut bindings = read_terminal_bindings_from(&path).unwrap_or_default();
-    bindings.insert(workspace.to_string(), bundle_id.to_string());
-
-    remember_bindings_into(dir, &bindings)
+    write_terminal_memory_into(dir, &memory)
 }
 
-/// Reads the per-workspace bindings map (`{ "workspaces": { <id>: <bundle> } }`).
-fn read_terminal_bindings_from(path: &Path) -> Option<std::collections::HashMap<String, String>> {
-    let content = fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let workspaces = value.get("workspaces")?.as_object()?;
-    let mut bindings = std::collections::HashMap::new();
-    for (workspace, id) in workspaces {
-        if let Some(id) = id.as_str() {
-            bindings.insert(workspace.clone(), id.to_string());
-        }
-    }
-    if bindings.is_empty() {
-        return None;
-    }
-    Some(bindings)
+/// Reads `{ "sessions": { <socket>: { <workspace>: <bundle> } } }`. A missing
+/// or unreadable file, including the pre-session `{ "workspaces": ... }`
+/// format, reads as empty and is replaced on the next write.
+fn read_terminal_memory_from(path: &Path) -> TerminalMemory {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
 }
 
 fn terminal_memory_path() -> PathBuf {
     plugin_state_dir().join("terminal-memory.json")
+}
+
+/// The session the plugin process runs for, identified by the API socket
+/// Herdr injects. Manual runs without one share the empty key.
+fn session_key() -> String {
+    env::var("HERDR_SOCKET_PATH").unwrap_or_default()
 }
 
 pub(crate) fn is_obvious_non_terminal_bundle(bundle_id: &str) -> bool {
@@ -330,37 +362,50 @@ mod tests {
     }
 
     #[test]
-    fn remembers_per_workspace_bindings() {
+    fn bindings_are_kept_per_workspace_and_per_session() {
         let dir = std::env::temp_dir().join(format!(
             "herdr-focus-notify-terminal-test-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-
         let path = dir.join("terminal-memory.json");
+        let (a, b) = ("/tmp/a/herdr.sock", "/tmp/b/herdr.sock");
+        let binding = |session: &str, workspace: &str| {
+            read_terminal_memory_from(&path)
+                .sessions
+                .get(session)
+                .and_then(|bindings| bindings.get(workspace).cloned())
+        };
 
-        // Two workspaces bind independently and one rewrite keeps the other.
-        remember_terminal_into(&dir, "w1", "com.googlecode.iterm2").unwrap();
-        remember_terminal_into(&dir, "w2", "net.kovidgoyal.kitty").unwrap();
-        let bindings = read_terminal_bindings_from(&path).expect("bindings should exist");
-        assert_eq!(
-            bindings.get("w1").map(String::as_str),
-            Some("com.googlecode.iterm2")
-        );
-        assert_eq!(
-            bindings.get("w2").map(String::as_str),
-            Some("net.kovidgoyal.kitty")
-        );
+        // A pre-session file reads as empty instead of failing.
+        fs::write(&path, r#"{"workspaces":{"w1":"com.googlecode.iterm2"}}"#).unwrap();
+        assert!(read_terminal_memory_from(&path).sessions.is_empty());
 
-        // Overwriting one workspace does not disturb the other.
-        remember_terminal_into(&dir, "w1", "app.warp").unwrap();
-        let bindings = read_terminal_bindings_from(&path).expect("bindings should exist");
-        assert_eq!(bindings.get("w1").map(String::as_str), Some("app.warp"));
-        assert_eq!(
-            bindings.get("w2").map(String::as_str),
-            Some("net.kovidgoyal.kitty")
-        );
+        // Workspaces bind independently, and the same workspace id in another
+        // session is a different binding.
+        remember_terminal_into(&dir, a, "w1", "com.googlecode.iterm2").unwrap();
+        remember_terminal_into(&dir, a, "w2", "net.kovidgoyal.kitty").unwrap();
+        remember_terminal_into(&dir, b, "w1", "app.warp").unwrap();
+        assert_eq!(binding(a, "w1").as_deref(), Some("com.googlecode.iterm2"));
+        assert_eq!(binding(a, "w2").as_deref(), Some("net.kovidgoyal.kitty"));
+        assert_eq!(binding(b, "w1").as_deref(), Some("app.warp"));
+
+        // Overwriting one binding disturbs no other.
+        remember_terminal_into(&dir, a, "w1", "com.mitchellh.ghostty").unwrap();
+        assert_eq!(binding(a, "w1").as_deref(), Some("com.mitchellh.ghostty"));
+        assert_eq!(binding(a, "w2").as_deref(), Some("net.kovidgoyal.kitty"));
+        assert_eq!(binding(b, "w1").as_deref(), Some("app.warp"));
+
+        // Pruning against one session's live workspaces leaves the others,
+        // and a session whose workspaces are all gone is dropped.
+        let mut memory = read_terminal_memory_from(&path);
+        assert!(retain_live_workspaces(&mut memory, a, &["w2".to_string()]));
+        assert!(!retain_live_workspaces(&mut memory, a, &["w2".to_string()]));
+        assert_eq!(memory.sessions[a].len(), 1);
+        assert_eq!(memory.sessions[b]["w1"], "app.warp");
+        assert!(retain_live_workspaces(&mut memory, b, &[]));
+        assert!(!memory.sessions.contains_key(b));
 
         fs::remove_dir_all(dir).unwrap();
     }

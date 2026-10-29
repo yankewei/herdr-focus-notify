@@ -43,7 +43,7 @@ herdr plugin link .
 
 ### 3. 完成——零配置
 
-插件**零配置开箱即用**。当你第一次在 Herdr 中聚焦 pane 时,插件会把当时最前面的终端绑定到该 pane 所在的 workspace,之后用它来在点击通知时激活终端、判断你是否正在查看对应 pane。每个 workspace 独立绑定——你在 kitty 里用完,换到 Ghostty 继续同一个 pane,点击通知就会激活 Ghostty。点击通知时，即使浏览器或其它 App 在前台，也不会改变已有绑定。
+插件**零配置开箱即用**。当你第一次在 Herdr 中聚焦 pane 时,插件会把当时最前面的终端绑定到该 pane 所在的 workspace,之后用它来在点击通知时激活终端、判断你是否正在查看对应 pane。每个 workspace 独立绑定(不同 Herdr session 的绑定也互相独立)——你在 kitty 里用完,换到 Ghostty 继续同一个 pane,点击通知就会激活 Ghostty。点击通知时，即使浏览器或其它 App 在前台，也不会改变已有绑定。
 
 你不需要创建任何配置文件。唯一的外部依赖是通知程序 `alerter`,插件会从 `PATH` 和常见 Homebrew 路径自动查找:
 
