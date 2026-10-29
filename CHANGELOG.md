@@ -2,7 +2,7 @@
 
 All notable changes to `herdr-focus-notify` are documented here.
 
-## [Unreleased]
+## [0.8.1] - 2026-10-29
 
 ### Added
 
